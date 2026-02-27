@@ -1,0 +1,28 @@
+# Swift Package Manager / Swift build artifacts
+.build/
+.swiftpm/
+Packages/
+
+# Dependency resolution lockfiles (commit only when needed)
+# Package.resolved
+
+# Xcode / SwiftPM workspace and user data
+.build/*
+.DS_Store
+*.xcworkspace
+*.xcodeproj
+*.xcodeproj/*
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Local development artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and temporary files
+*.log
+test-results/

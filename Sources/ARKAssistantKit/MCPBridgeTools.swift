@@ -1,3 +1,7 @@
+/// Documents the MCP Bridge Tools source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `MCPToolCatalog`, `MCPListToolsArguments`, `MCPListToolsTool`, and `MCPCallToolArguments`.
+
 import Foundation
 
 import MCPClientKit
@@ -5,6 +9,7 @@ import MCPClientKit
 #if canImport(FoundationModels)
 import FoundationModels
 
+/// Implements the MCP Tool Catalog type for ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 actor MCPToolCatalog: Sendable {
     private let mcp: MCPClient
@@ -25,6 +30,7 @@ actor MCPToolCatalog: Sendable {
     }
 }
 
+/// Defines the MCP List Tools Arguments value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct MCPListToolsArguments {
@@ -35,6 +41,7 @@ struct MCPListToolsArguments {
     var maxResults: Int?
 }
 
+/// Defines the MCP List Tools Tool value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 struct MCPListToolsTool: FoundationModels.Tool {
     typealias Arguments = MCPListToolsArguments
@@ -102,6 +109,7 @@ struct MCPListToolsTool: FoundationModels.Tool {
     }
 }
 
+/// Defines the MCP Call Tool Arguments value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct MCPCallToolArguments {
@@ -112,6 +120,7 @@ struct MCPCallToolArguments {
     var json: String?
 }
 
+/// Defines the MCP Call Tool Tool value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 struct MCPCallToolTool: FoundationModels.Tool {
     typealias ResultObserver = @Sendable (MCPToolCallResult) -> Void
@@ -200,6 +209,7 @@ struct MCPCallToolTool: FoundationModels.Tool {
     }
 }
 
+/// Defines MCP Tool Formatting cases used by ARKAssistantKit in the shared Swift packages.
 enum MCPToolFormatting {
     private static let maxToolOutputChars = 6_000
 

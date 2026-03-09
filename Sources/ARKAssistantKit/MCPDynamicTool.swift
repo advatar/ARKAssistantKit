@@ -1,3 +1,7 @@
+/// Documents the MCP Dynamic Tool source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `MCPDynamicTool`.
+
 import Foundation
 
 import MCPClientKit
@@ -5,6 +9,7 @@ import MCPClientKit
 #if canImport(FoundationModels)
 import FoundationModels
 
+/// Defines the MCP Dynamic Tool value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 struct MCPDynamicTool: FoundationModels.Tool {
     let name: String

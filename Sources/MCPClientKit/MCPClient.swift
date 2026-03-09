@@ -1,5 +1,10 @@
+/// Coordinates MCP Client responsibilities for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `MCPToolDefinition`, `MCPToolCallResult`, and `MCPClient`.
+
 import Foundation
 
+/// Defines the MCP Tool Definition value used by ARKAssistantKit in the shared Swift packages.
 public struct MCPToolDefinition: Sendable, Identifiable {
     public let id = UUID()
     public let name: String
@@ -13,6 +18,7 @@ public struct MCPToolDefinition: Sendable, Identifiable {
     }
 }
 
+/// Models the MCP Tool Call Result data carried through ARKAssistantKit in the shared Swift packages.
 public struct MCPToolCallResult: Sendable {
     public struct ContentItem: Sendable, Equatable {
         public let type: String
@@ -39,6 +45,7 @@ public struct MCPToolCallResult: Sendable {
     }
 }
 
+/// Coordinates MCP Client responsibilities for ARKAssistantKit in the shared Swift packages.
 public actor MCPClient {
     public struct Config: Sendable {
         public let endpoint: URL

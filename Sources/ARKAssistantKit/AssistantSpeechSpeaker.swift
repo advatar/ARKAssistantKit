@@ -1,5 +1,10 @@
+/// Documents the assistant Speech Speaker source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantSpeechSpeaker` and `AssistantSpeechSpeaker`.
+
 import AVFoundation
 
+/// Implements the assistant Speech Speaker type for ARKAssistantKit in the shared Swift packages.
 @MainActor
 final class AssistantSpeechSpeaker: NSObject {
     private let synthesizer = AVSpeechSynthesizer()
@@ -62,6 +67,7 @@ final class AssistantSpeechSpeaker: NSObject {
     }
 }
 
+/// Extends `AssistantSpeechSpeaker` with behavior used by ARKAssistantKit in the shared Swift packages.
 extension AssistantSpeechSpeaker: AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         let utteranceID = ObjectIdentifier(utterance)

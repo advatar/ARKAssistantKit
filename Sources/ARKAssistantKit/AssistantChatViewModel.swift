@@ -1,3 +1,7 @@
+/// Collects UI state and presentation logic for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantChatViewModel` and `WeakMainActorModel`.
+
 import Foundation
 import Combine
 import SwiftUI
@@ -9,6 +13,7 @@ import MCPClientKit
 import FoundationModels
 #endif
 
+/// Implements the assistant Chat View Model type for ARKAssistantKit in the shared Swift packages.
 @MainActor
 public final class AssistantChatViewModel: ObservableObject {
     public struct Message: Identifiable, Equatable {
@@ -525,6 +530,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
 }
 
+/// Implements the weak Main Actor Model type for ARKAssistantKit in the shared Swift packages.
 private final class WeakMainActorModel: @unchecked Sendable {
     weak var value: AssistantChatViewModel?
 

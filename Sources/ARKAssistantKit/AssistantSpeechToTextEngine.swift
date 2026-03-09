@@ -1,3 +1,7 @@
+/// Documents the assistant Speech To Text Engine source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantSpeechToTextEngine`.
+
 import AVFoundation
 import Speech
 

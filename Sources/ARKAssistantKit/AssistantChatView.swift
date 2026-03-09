@@ -1,5 +1,10 @@
+/// Collects UI state and presentation logic for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantChatScreen`, `AssistantChatView`, and `View`.
+
 import SwiftUI
 
+/// Presents the assistant Chat Screen interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatScreen: View {
     @StateObject private var model: AssistantChatViewModel
 
@@ -12,6 +17,7 @@ public struct AssistantChatScreen: View {
     }
 }
 
+/// Presents the assistant Chat View interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatView: View {
     @ObservedObject private var model: AssistantChatViewModel
 
@@ -205,6 +211,7 @@ public struct AssistantChatView: View {
     }
 }
 
+/// Extends `View` with behavior used by ARKAssistantKit in the shared Swift packages.
 private extension View {
     @ViewBuilder
     func ark_onChangeCompat<Value: Equatable>(_ value: Value, perform: @escaping () -> Void) -> some View {

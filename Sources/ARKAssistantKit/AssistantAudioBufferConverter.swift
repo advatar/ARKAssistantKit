@@ -1,5 +1,10 @@
+/// Documents the assistant Audio Buffer Converter source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `OneShotInputState` and `AssistantAudioBufferConverter`.
+
 import AVFoundation
 
+/// Implements the one Shot Input State type for ARKAssistantKit in the shared Swift packages.
 private final class OneShotInputState: @unchecked Sendable {
     var didProvideInput = false
     let buffer: AVAudioPCMBuffer

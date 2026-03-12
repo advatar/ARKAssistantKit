@@ -6,6 +6,51 @@ import Foundation
 
 import MCPClientKit
 
+struct MCPDefaultToolContext: Sendable {
+    let projectID: String?
+
+    init(projectID: String? = nil) {
+        let trimmed = projectID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.projectID = (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+}
+
+enum MCPDefaultToolArguments {
+    static func mergedArguments(
+        for tool: MCPToolDefinition?,
+        arguments: [String: Any],
+        defaults: MCPDefaultToolContext
+    ) -> [String: Any] {
+        guard let projectID = defaults.projectID,
+              supportsProjectID(tool),
+              !containsNonEmptyValue(forKey: "project_id", in: arguments) else {
+            return arguments
+        }
+
+        var merged = arguments
+        merged["project_id"] = projectID
+        return merged
+    }
+
+    private static func supportsProjectID(_ tool: MCPToolDefinition?) -> Bool {
+        guard let tool,
+              let data = tool.inputSchemaJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+              let properties = object["properties"] as? [String: Any] else {
+            return false
+        }
+        return properties["project_id"] != nil
+    }
+
+    private static func containsNonEmptyValue(forKey key: String, in arguments: [String: Any]) -> Bool {
+        guard let value = arguments[key] else { return false }
+        if let string = value as? String {
+            return !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return true
+    }
+}
+
 #if canImport(FoundationModels)
 import FoundationModels
 
@@ -133,10 +178,17 @@ struct MCPCallToolTool: FoundationModels.Tool {
     private let mcp: MCPClient
     private let catalog: MCPToolCatalog?
     private let resultObserver: ResultObserver?
+    private let defaults: MCPDefaultToolContext
 
-    init(mcp: MCPClient, catalog: MCPToolCatalog? = nil, resultObserver: ResultObserver? = nil) {
+    init(
+        mcp: MCPClient,
+        catalog: MCPToolCatalog? = nil,
+        defaults: MCPDefaultToolContext = MCPDefaultToolContext(),
+        resultObserver: ResultObserver? = nil
+    ) {
         self.mcp = mcp
         self.catalog = catalog
+        self.defaults = defaults
         self.resultObserver = resultObserver
     }
 
@@ -152,11 +204,17 @@ struct MCPCallToolTool: FoundationModels.Tool {
         }
 
         let rawJSON = arguments.json ?? "{}"
-        let dict = MCPToolFormatting.decodeArguments(from: rawJSON)
+        let decodedArguments = MCPToolFormatting.decodeArguments(from: rawJSON)
         let resolvedName = await resolvedToolName(for: requestedName)
         guard let toolName = resolvedName else {
             return unknownToolResponse(for: requestedName)
         }
+        let toolDefinition = await resolvedToolDefinition(for: toolName)
+        let dict = MCPDefaultToolArguments.mergedArguments(
+            for: toolDefinition,
+            arguments: decodedArguments,
+            defaults: defaults
+        )
 
         do {
             let result = try await mcp.callTool(name: toolName, arguments: dict)
@@ -196,6 +254,14 @@ struct MCPCallToolTool: FoundationModels.Tool {
         }
 
         return nil
+    }
+
+    private func resolvedToolDefinition(for toolName: String) async -> MCPToolDefinition? {
+        guard let catalog,
+              let tools = try? await catalog.tools() else {
+            return nil
+        }
+        return tools.first(where: { $0.name == toolName })
     }
 
     private func unknownToolResponse(for requestedName: String) -> String {

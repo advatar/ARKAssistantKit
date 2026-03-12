@@ -74,6 +74,7 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientVersion: String
     private let protocolVersion: String
     private let conversationContext: String?
+    private let defaultToolContext: MCPDefaultToolContext
 
     public init(
         endpoint: URL? = nil,
@@ -81,6 +82,7 @@ public final class AssistantChatViewModel: ObservableObject {
         clientVersion: String = "0.1.0",
         protocolVersion: String = "2024-11-05",
         contextSummary: String? = nil,
+        defaultProjectID: String? = nil,
         headerProvider: MCPHeaderProvider? = nil
     ) {
         self.clientName = clientName
@@ -88,6 +90,7 @@ public final class AssistantChatViewModel: ObservableObject {
         self.protocolVersion = protocolVersion
         self.conversationContext = contextSummary?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.defaultToolContext = MCPDefaultToolContext(projectID: defaultProjectID)
         self.mcpClient = MCPClient(
             config: AssistantChatViewModel.makeConfig(
                 endpoint: endpoint,
@@ -498,7 +501,7 @@ public final class AssistantChatViewModel: ObservableObject {
             let weakModel = WeakMainActorModel(self)
             let mcpTools: [any FoundationModels.Tool] = [
                 MCPListToolsTool(catalog: catalog),
-                MCPCallToolTool(mcp: mcpClient, catalog: catalog) { result in
+                MCPCallToolTool(mcp: mcpClient, catalog: catalog, defaults: defaultToolContext) { result in
                     Task { @MainActor in
                         weakModel.value?.captureA2UITokens(from: result)
                     }

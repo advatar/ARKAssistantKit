@@ -152,10 +152,16 @@ public actor MCPClient {
     }
 
     private static func resolveAppEndpoint(env: [String: String]) -> URL? {
-        let appGroupId = env["ARK_APP_GROUP_ID"] ?? "group.com.covenant"
+        #if os(iOS)
+        let appGroupId: String? = nil
+        #else
+        let appGroupId = env["ARK_APP_GROUP_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        #endif
 
         let base: URL
-        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
+        if let appGroupId,
+           !appGroupId.isEmpty,
+           let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             base = groupURL.appendingPathComponent("Library/Application Support", isDirectory: true)
         } else {
             base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -193,23 +199,25 @@ public actor MCPClient {
 
     public func callTool(name: String, arguments: [String: Any]) async throws -> MCPToolCallResult {
         try await ensureInitialized()
-        let response = try await sendRequest(method: "tools/call", params: [
+        let params: [String: Any] = [
             "name": name,
             "arguments": arguments
-        ])
+        ]
+        let response = try await sendRequest(method: "tools/call", params: params)
+        let result = try Self.parseToolCallResult(from: response)
 
-        guard let result = response["result"] as? [String: Any] else {
-            throw MCPError.decodeFailed("Missing tool result")
+        if config.headerProvider != nil,
+           result.isError,
+           Self.isLikelyAuthenticationMessage(result.text) {
+            let retryResponse = try await sendRequest(
+                method: "tools/call",
+                params: params,
+                forceAuthRefresh: true
+            )
+            return try Self.parseToolCallResult(from: retryResponse)
         }
 
-        let isError = result["isError"] as? Bool ?? false
-        let content = result["content"] as? [[String: Any]] ?? []
-        let text = Self.renderContentText(from: content)
-        return MCPToolCallResult(
-            text: text,
-            isError: isError,
-            content: Self.parseContentItems(from: content)
-        )
+        return result
     }
 
     private func ensureInitialized() async throws {
@@ -225,14 +233,19 @@ public actor MCPClient {
         initialized = true
     }
 
-    private func sendRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
+    private func sendRequest(
+        method: String,
+        params: [String: Any],
+        forceAuthRefresh: Bool = false
+    ) async throws -> [String: Any] {
         if let fallback = config.fallbackEndpoint {
             if activeEndpoint.absoluteString == config.endpoint.absoluteString,
                let response = try await sendRequestWithFallback(
                 primary: activeEndpoint,
                 fallback: fallback,
                 method: method,
-                params: params
+                params: params,
+                forceAuthRefresh: forceAuthRefresh
                ) {
                 return response
             }
@@ -241,18 +254,35 @@ public actor MCPClient {
                 primary: activeEndpoint,
                 fallback: config.endpoint,
                 method: method,
-                params: params
+                params: params,
+                forceAuthRefresh: forceAuthRefresh
                ) {
                 return response
             }
         }
 
-        return try await sendRequest(method: method, params: params, endpoint: activeEndpoint)
+        return try await sendRequest(
+            method: method,
+            params: params,
+            endpoint: activeEndpoint,
+            forceAuthRefresh: forceAuthRefresh
+        )
     }
 
-    private func sendRequestWithFallback(primary: URL, fallback: URL, method: String, params: [String: Any]) async throws -> [String: Any]? {
+    private func sendRequestWithFallback(
+        primary: URL,
+        fallback: URL,
+        method: String,
+        params: [String: Any],
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any]? {
         do {
-            return try await sendRequest(method: method, params: params, endpoint: primary)
+            return try await sendRequest(
+                method: method,
+                params: params,
+                endpoint: primary,
+                forceAuthRefresh: forceAuthRefresh
+            )
         } catch {
             guard shouldRetry(error) else { throw error }
         }
@@ -262,7 +292,12 @@ public actor MCPClient {
             sessionId = nil
             let response: [String: Any]
             do {
-                response = try await sendRequest(method: method, params: params, endpoint: fallback)
+                response = try await sendRequest(
+                    method: method,
+                    params: params,
+                    endpoint: fallback,
+                    forceAuthRefresh: forceAuthRefresh
+                )
             } catch {
                 sessionId = previousSessionId
                 throw error
@@ -277,7 +312,12 @@ public actor MCPClient {
         }
     }
 
-    private func sendRequest(method: String, params: [String: Any], endpoint: URL) async throws -> [String: Any] {
+    private func sendRequest(
+        method: String,
+        params: [String: Any],
+        endpoint: URL,
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any] {
         let id = nextId
         nextId += 1
 
@@ -289,11 +329,21 @@ public actor MCPClient {
         ]
 
         let body = try JSONSerialization.data(withJSONObject: payload, options: [])
-        return try await performRequest(body: body, endpoint: endpoint, allowAuthRefresh: true)
+        return try await performRequest(
+            body: body,
+            endpoint: endpoint,
+            allowAuthRefresh: !forceAuthRefresh,
+            forceAuthRefresh: forceAuthRefresh
+        )
     }
 
-    private func performRequest(body: Data, endpoint: URL, allowAuthRefresh: Bool) async throws -> [String: Any] {
-        let request = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: false)
+    private func performRequest(
+        body: Data,
+        endpoint: URL,
+        allowAuthRefresh: Bool,
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any] {
+        let request = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: forceAuthRefresh)
         do {
             return try await execute(request: request)
         } catch let error as MCPError {
@@ -343,6 +393,10 @@ public actor MCPClient {
         let json = try Self.decodeResponseObject(from: data)
         if let error = json["error"] as? [String: Any] {
             let message = error["message"] as? String ?? "Unknown error"
+            let code = error["code"] as? Int
+            if let code {
+                throw MCPError.serverError("[\(code)] \(message)")
+            }
             throw MCPError.serverError(message)
         }
 
@@ -390,6 +444,46 @@ public actor MCPClient {
     private static func parseJSONObject(from data: Data) throws -> [String: Any]? {
         let object = try JSONSerialization.jsonObject(with: data, options: [])
         return object as? [String: Any]
+    }
+
+    static func parseToolCallResult(from response: [String: Any]) throws -> MCPToolCallResult {
+        guard let result = response["result"] as? [String: Any] else {
+            throw MCPError.decodeFailed("Missing tool result")
+        }
+
+        let isError = result["isError"] as? Bool ?? false
+        let content = result["content"] as? [[String: Any]] ?? []
+        let text = Self.renderContentText(from: content)
+        return MCPToolCallResult(
+            text: text,
+            isError: isError,
+            content: Self.parseContentItems(from: content)
+        )
+    }
+
+    static func isLikelyAuthenticationMessage(_ message: String) -> Bool {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+
+        let authIndicators = [
+            "http 401",
+            "http 403",
+            "access token is invalid or expired",
+            "authentication required",
+            "authorization required",
+            "invalid or expired",
+            "invalid token",
+            "missing token",
+            "private-token",
+            "refresh token",
+            "token expired",
+            "token invalid",
+            "unauthorized",
+            "insufficient scope",
+            "insufficient scopes"
+        ]
+
+        return authIndicators.contains { normalized.contains($0) }
     }
 
     private static func httpError(statusCode: Int, data: Data) -> MCPError {
@@ -453,8 +547,10 @@ public actor MCPClient {
 private extension MCPClient.MCPError {
     var isAuthenticationFailure: Bool {
         switch self {
+        case .serverError(let message):
+            return MCPClient.isLikelyAuthenticationMessage(message)
         case .requestFailed(let message):
-            return message.hasPrefix("HTTP 401") || message.hasPrefix("HTTP 403")
+            return MCPClient.isLikelyAuthenticationMessage(message)
         default:
             return false
         }

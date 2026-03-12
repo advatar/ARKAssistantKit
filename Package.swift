@@ -22,6 +22,9 @@ let package = Package(
             name: "ARKAssistantKit",
             dependencies: ["MCPClientKit"]
         ),
+        .testTarget(
+            name: "MCPClientKitTests",
+            dependencies: ["MCPClientKit"]
+        ),
     ]
 )
-

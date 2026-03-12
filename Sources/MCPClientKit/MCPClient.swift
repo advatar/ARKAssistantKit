@@ -4,6 +4,10 @@
 
 import Foundation
 
+public protocol MCPHeaderProvider: Sendable {
+    func headerFields(refresh: Bool) async throws -> [String: String]
+}
+
 /// Defines the MCP Tool Definition value used by ARKAssistantKit in the shared Swift packages.
 public struct MCPToolDefinition: Sendable, Identifiable {
     public let id = UUID()
@@ -53,19 +57,22 @@ public actor MCPClient {
         public let clientName: String
         public let clientVersion: String
         public let protocolVersion: String
+        public let headerProvider: MCPHeaderProvider?
 
         public init(
             endpoint: URL,
             fallbackEndpoint: URL?,
             clientName: String,
             clientVersion: String,
-            protocolVersion: String
+            protocolVersion: String,
+            headerProvider: MCPHeaderProvider? = nil
         ) {
             self.endpoint = endpoint
             self.fallbackEndpoint = fallbackEndpoint
             self.clientName = clientName
             self.clientVersion = clientVersion
             self.protocolVersion = protocolVersion
+            self.headerProvider = headerProvider
         }
 
         public static func `default`() -> Config {
@@ -75,7 +82,8 @@ public actor MCPClient {
                 fallbackEndpoint: endpoints.fallback,
                 clientName: "ARK",
                 clientVersion: "0.1.0",
-                protocolVersion: "2024-11-05"
+                protocolVersion: "2024-11-05",
+                headerProvider: nil
             )
         }
     }
@@ -105,6 +113,7 @@ public actor MCPClient {
     private var nextId: Int = 1
     private var initialized = false
     private var activeEndpoint: URL
+    private var sessionId: String?
 
     public init(config: Config = .default(), session: URLSession = .shared) {
         self.config = config
@@ -249,7 +258,15 @@ public actor MCPClient {
         }
 
         do {
-            let response = try await sendRequest(method: method, params: params, endpoint: fallback)
+            let previousSessionId = sessionId
+            sessionId = nil
+            let response: [String: Any]
+            do {
+                response = try await sendRequest(method: method, params: params, endpoint: fallback)
+            } catch {
+                sessionId = previousSessionId
+                throw error
+            }
             activeEndpoint = fallback
             if method != "initialize" {
                 initialized = false
@@ -272,21 +289,58 @@ public actor MCPClient {
         ]
 
         let body = try JSONSerialization.data(withJSONObject: payload, options: [])
+        return try await performRequest(body: body, endpoint: endpoint, allowAuthRefresh: true)
+    }
+
+    private func performRequest(body: Data, endpoint: URL, allowAuthRefresh: Bool) async throws -> [String: Any] {
+        let request = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: false)
+        do {
+            return try await execute(request: request)
+        } catch let error as MCPError {
+            if allowAuthRefresh,
+               error.isAuthenticationFailure,
+               config.headerProvider != nil {
+                let retryRequest = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: true)
+                return try await execute(request: retryRequest)
+            }
+            throw error
+        }
+    }
+
+    private func buildRequest(endpoint: URL, body: Data, refreshAuth: Bool) async throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw MCPError.requestFailed("HTTP \(http.statusCode)")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        if let sessionId {
+            request.setValue(sessionId, forHTTPHeaderField: "mcp-session-id")
         }
+        if let headerProvider = config.headerProvider {
+            let headers = try await headerProvider.headerFields(refresh: refreshAuth)
+            for (field, value) in headers {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+        }
+        return request
+    }
 
-        let object = try JSONSerialization.jsonObject(with: data, options: [])
-        guard let json = object as? [String: Any] else {
+    private func execute(request: URLRequest) async throws -> [String: Any] {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
             throw MCPError.invalidResponse
         }
 
+        if let returnedSessionId = http.value(forHTTPHeaderField: "mcp-session-id"),
+           !returnedSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sessionId = returnedSessionId
+        }
+
+        if !(200..<300).contains(http.statusCode) {
+            throw Self.httpError(statusCode: http.statusCode, data: data)
+        }
+
+        let json = try Self.decodeResponseObject(from: data)
         if let error = json["error"] as? [String: Any] {
             let message = error["message"] as? String ?? "Unknown error"
             throw MCPError.serverError(message)
@@ -305,6 +359,47 @@ public actor MCPClient {
             }
         }
         return false
+    }
+
+    static func decodeResponseObject(from data: Data) throws -> [String: Any] {
+        if let object = try? Self.parseJSONObject(from: data) {
+            return object
+        }
+        if let eventData = Self.extractEventStreamJSONData(from: data),
+           let object = try? Self.parseJSONObject(from: eventData) {
+            return object
+        }
+        throw MCPError.invalidResponse
+    }
+
+    static func extractEventStreamJSONData(from data: Data) -> Data? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var payloadLines: [String] = []
+
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            guard line.hasPrefix("data:") else { continue }
+            let value = String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+            payloadLines.append(value)
+        }
+
+        guard !payloadLines.isEmpty else { return nil }
+        return payloadLines.joined(separator: "\n").data(using: .utf8)
+    }
+
+    private static func parseJSONObject(from data: Data) throws -> [String: Any]? {
+        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        return object as? [String: Any]
+    }
+
+    private static func httpError(statusCode: Int, data: Data) -> MCPError {
+        if let payload = try? decodeResponseObject(from: data),
+           let error = payload["error"] as? [String: Any],
+           let message = error["message"] as? String,
+           !message.isEmpty {
+            return .requestFailed("HTTP \(statusCode): \(message)")
+        }
+        return .requestFailed("HTTP \(statusCode)")
     }
 
     private static func encodeJSON(_ value: Any) -> String? {
@@ -352,5 +447,16 @@ public actor MCPClient {
             }
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+private extension MCPClient.MCPError {
+    var isAuthenticationFailure: Bool {
+        switch self {
+        case .requestFailed(let message):
+            return message.hasPrefix("HTTP 401") || message.hasPrefix("HTTP 403")
+        default:
+            return false
+        }
     }
 }

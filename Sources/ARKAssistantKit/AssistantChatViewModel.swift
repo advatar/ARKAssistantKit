@@ -74,11 +74,25 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientVersion: String
     private let protocolVersion: String
 
-    public init(endpoint: URL? = nil, clientName: String = "ARK", clientVersion: String = "0.1.0", protocolVersion: String = "2024-11-05") {
+    public init(
+        endpoint: URL? = nil,
+        clientName: String = "ARK",
+        clientVersion: String = "0.1.0",
+        protocolVersion: String = "2024-11-05",
+        headerProvider: MCPHeaderProvider? = nil
+    ) {
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.protocolVersion = protocolVersion
-        self.mcpClient = MCPClient(config: AssistantChatViewModel.makeConfig(endpoint: endpoint, clientName: clientName, clientVersion: clientVersion, protocolVersion: protocolVersion))
+        self.mcpClient = MCPClient(
+            config: AssistantChatViewModel.makeConfig(
+                endpoint: endpoint,
+                clientName: clientName,
+                clientVersion: clientVersion,
+                protocolVersion: protocolVersion,
+                headerProvider: headerProvider
+            )
+        )
         updateLocalModelStatus()
 
         #if os(iOS)
@@ -91,8 +105,16 @@ public final class AssistantChatViewModel: ObservableObject {
         Task { await self.refreshTools() }
     }
 
-    public func setEndpoint(_ endpoint: URL?) {
-        mcpClient = MCPClient(config: AssistantChatViewModel.makeConfig(endpoint: endpoint, clientName: clientName, clientVersion: clientVersion, protocolVersion: protocolVersion))
+    public func setEndpoint(_ endpoint: URL?, headerProvider: MCPHeaderProvider? = nil) {
+        mcpClient = MCPClient(
+            config: AssistantChatViewModel.makeConfig(
+                endpoint: endpoint,
+                clientName: clientName,
+                clientVersion: clientVersion,
+                protocolVersion: protocolVersion,
+                headerProvider: headerProvider
+            )
+        )
         toolCache.removeAll(keepingCapacity: true)
         lastError = nil
 
@@ -106,7 +128,13 @@ public final class AssistantChatViewModel: ObservableObject {
         Task { await self.refreshTools() }
     }
 
-    private static func makeConfig(endpoint: URL?, clientName: String, clientVersion: String, protocolVersion: String) -> MCPClient.Config {
+    private static func makeConfig(
+        endpoint: URL?,
+        clientName: String,
+        clientVersion: String,
+        protocolVersion: String,
+        headerProvider: MCPHeaderProvider?
+    ) -> MCPClient.Config {
         let endpoints = MCPClient.resolveEndpoints()
         let resolved = endpoint ?? endpoints.primary
         return MCPClient.Config(
@@ -114,7 +142,8 @@ public final class AssistantChatViewModel: ObservableObject {
             fallbackEndpoint: endpoint == nil ? endpoints.fallback : nil,
             clientName: clientName,
             clientVersion: clientVersion,
-            protocolVersion: protocolVersion
+            protocolVersion: protocolVersion,
+            headerProvider: headerProvider
         )
     }
 

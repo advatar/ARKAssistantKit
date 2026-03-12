@@ -73,17 +73,21 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientName: String
     private let clientVersion: String
     private let protocolVersion: String
+    private let conversationContext: String?
 
     public init(
         endpoint: URL? = nil,
         clientName: String = "ARK",
         clientVersion: String = "0.1.0",
         protocolVersion: String = "2024-11-05",
+        contextSummary: String? = nil,
         headerProvider: MCPHeaderProvider? = nil
     ) {
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.protocolVersion = protocolVersion
+        self.conversationContext = contextSummary?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         self.mcpClient = MCPClient(
             config: AssistantChatViewModel.makeConfig(
                 endpoint: endpoint,
@@ -429,12 +433,21 @@ public final class AssistantChatViewModel: ObservableObject {
 
         let history = lines.reversed().joined(separator: "\n")
         let trimmedUserText = truncateForPrompt(userText, maxChars: maxUserChars)
+        let contextBlock = {
+            guard let conversationContext, !conversationContext.isEmpty else {
+                return "Project context: (none)"
+            }
+            return "Project context:\n\(conversationContext)"
+        }()
 
         return """
         You are ARK Assistant. Keep responses concise and actionable.
         Chat naturally. Use MCP tools only when ARK data or actions are needed.
+        Treat project context as the default target for MCP tool arguments unless the user specifies a different project.
 
-        Conversation (most recent last, may be truncated):
+        \(contextBlock)
+
+        Conversation history (most recent last, may be truncated):
         \(history.isEmpty ? "(none)" : history)
 
         User: \(trimmedUserText)
@@ -497,6 +510,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 You are an ARK assistant.
                 For greetings and general chat, reply directly without tools.
                 Only call MCP tools when user intent requires ARK data/actions.
+                If the prompt includes project context, treat it as the default project for tool arguments unless the user overrides it.
                 When tools are needed, call `mcp_list_tools` with a focused query, then `mcp_call_tool`.
                 """
             )

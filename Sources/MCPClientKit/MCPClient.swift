@@ -4,6 +4,7 @@
 
 import Foundation
 
+/// Describes the MCP header provider contract used by the ARKAssistantKit module.
 public protocol MCPHeaderProvider: Sendable {
     func headerFields(refresh: Bool) async throws -> [String: String]
 }
@@ -544,6 +545,7 @@ public actor MCPClient {
     }
 }
 
+/// Extends `MCPClient.MCPError` with behavior used by the ARKAssistantKit module.
 private extension MCPClient.MCPError {
     var isAuthenticationFailure: Bool {
         switch self {

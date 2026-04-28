@@ -1,9 +1,14 @@
+/// Exercises MCP default tool arguments tests behavior for the ARKAssistantKit module.
+///
+/// Primary declarations include `MCPDefaultToolArgumentsTests`.
+
 import Foundation
 import Testing
 @testable import ARKAssistantKit
 
 import MCPClientKit
 
+/// Defines the MCP default tool arguments tests value used by the ARKAssistantKit module.
 struct MCPDefaultToolArgumentsTests {
     @Test func fillsProjectIdentifierWhenToolSupportsIt() throws {
         let tool = MCPToolDefinition(

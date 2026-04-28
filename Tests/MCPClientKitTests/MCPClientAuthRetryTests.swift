@@ -1,7 +1,12 @@
+/// Exercises MCP client auth retry tests behavior for the ARKAssistantKit module.
+///
+/// Primary declarations include `MCPClientAuthRetryTests`, `TestHeaderProvider`, `StubbedMCPURLProtocol`, and `StubResponse`.
+
 import Foundation
 import Testing
 @testable import MCPClientKit
 
+/// Defines the MCP client auth retry tests value used by the ARKAssistantKit module.
 struct MCPClientAuthRetryTests {
     @Test func retriesToolCallWhenHostedMCPReturnsAuthLikeToolError() async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -83,12 +88,14 @@ struct MCPClientAuthRetryTests {
     }
 }
 
+/// Implements the test header provider type for the ARKAssistantKit module.
 private actor TestHeaderProvider: MCPHeaderProvider {
     func headerFields(refresh: Bool) async throws -> [String: String] {
         ["Authorization": refresh ? "Bearer refreshed-token" : "Bearer stale-token"]
     }
 }
 
+/// Implements the stubbed mcpurl protocol type for the ARKAssistantKit module.
 private final class StubbedMCPURLProtocol: URLProtocol {
     static var handler: ((URLRequest) throws -> StubResponse)?
     private static let lock = NSLock()
@@ -139,11 +146,13 @@ private final class StubbedMCPURLProtocol: URLProtocol {
     }
 }
 
+/// Models the stub response data carried through the ARKAssistantKit module.
 private struct StubResponse {
     let response: HTTPURLResponse
     let body: Data
 }
 
+/// Implements the locked box type for the ARKAssistantKit module.
 private final class LockedBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value

@@ -6,6 +6,7 @@ import Foundation
 
 import MCPClientKit
 
+/// Models the MCP default tool context data carried through the ARKAssistantKit module.
 struct MCPDefaultToolContext: Sendable {
     let projectID: String?
 
@@ -15,6 +16,7 @@ struct MCPDefaultToolContext: Sendable {
     }
 }
 
+/// Provides the MCP default tool arguments namespace used by the ARKAssistantKit module.
 enum MCPDefaultToolArguments {
     static func mergedArguments(
         for tool: MCPToolDefinition?,

@@ -1,7 +1,12 @@
+/// Exercises MCP client response parsing tests behavior for the ARKAssistantKit module.
+///
+/// Primary declarations include `MCPClientResponseParsingTests`.
+
 import Foundation
 import Testing
 @testable import MCPClientKit
 
+/// Defines the MCP client response parsing tests value used by the ARKAssistantKit module.
 struct MCPClientResponseParsingTests {
     @Test func decodesPlainJSONResponse() throws {
         let data = Data(#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#.utf8)

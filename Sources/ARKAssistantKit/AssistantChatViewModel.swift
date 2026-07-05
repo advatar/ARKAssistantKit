@@ -344,6 +344,14 @@ public final class AssistantChatViewModel: ObservableObject {
                 return
             }
 
+            if let response = Self.navigationLinkResponse(for: userText) {
+                appendMessage(role: .assistant, text: response)
+                if speakResponse {
+                    await speechSpeaker.speak(response)
+                }
+                return
+            }
+
             if let request = projectToolRequest(for: userText, tools: tools) {
                 let result = try await mcpClient.callTool(name: request.name, arguments: request.arguments)
                 captureA2UITokens(from: result)
@@ -470,6 +478,45 @@ public final class AssistantChatViewModel: ObservableObject {
         ]
 
         return triggers.contains { normalized.contains($0) }
+    }
+
+    nonisolated static func navigationLinkResponse(for text: String) -> String? {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        let actionTerms = [
+            "go to",
+            "navigate",
+            "open",
+            "show me",
+            "take me"
+        ]
+        guard actionTerms.contains(where: { normalized.contains($0) }) else {
+            return nil
+        }
+
+        let destinations: [(terms: [String], title: String, url: String)] = [
+            (["settings", "preferences"], "Settings", "ark://navigate/settings"),
+            (["dashboard", "home"], "Dashboard", "ark://navigate/dashboard"),
+            (["mailbox", "inbox", "shares"], "Mailbox", "ark://navigate/mailbox"),
+            (["people", "team", "collaborators"], "People", "ark://navigate/people"),
+            (["proofs", "proof"], "Proofs", "ark://navigate/proofs"),
+            (["sessions", "studio sessions", "studio"], "Sessions", "ark://navigate/sessions"),
+            (["timeline", "activity"], "Timeline", "ark://navigate/timeline"),
+            (["workflows", "workflow"], "Workflows", "ark://navigate/workflows"),
+            (["help", "support"], "Help", "ark://navigate/help"),
+            (["projects", "project list"], "Projects", "ark://navigate/projects")
+        ]
+
+        guard let destination = destinations.first(where: { destination in
+            destination.terms.contains(where: { normalized.contains($0) })
+        }) else {
+            return nil
+        }
+
+        return "Open [\(destination.title)](\(destination.url))."
     }
 
     private struct MCPToolRequest {

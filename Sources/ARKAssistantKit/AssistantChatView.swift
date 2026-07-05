@@ -168,7 +168,7 @@ public struct AssistantChatView: View {
     private func messageRow(_ message: AssistantChatViewModel.Message) -> some View {
         HStack {
             if message.role == .user { Spacer() }
-            Text(message.text)
+            messageText(message.text)
                 .font(.body)
                 .foregroundColor(.primary)
                 .padding(8)
@@ -177,6 +177,18 @@ public struct AssistantChatView: View {
                 .frame(maxWidth: 300, alignment: message.role == .user ? .trailing : .leading)
             if message.role == .assistant { Spacer() }
         }
+    }
+
+    private func messageText(_ text: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 
     @ViewBuilder

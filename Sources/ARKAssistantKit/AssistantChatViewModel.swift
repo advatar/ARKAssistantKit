@@ -152,14 +152,12 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public var canSend: Bool {
-        localLLMClient.canAttemptResponse
-            && !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isResponding
     }
 
     public var canUseVoice: Bool {
-        localLLMClient.canAttemptResponse
-            && !isResponding
+        !isResponding
             && !isTranscribingVoice
     }
 
@@ -324,12 +322,6 @@ public final class AssistantChatViewModel: ObservableObject {
 
     private func generateResponse(for userText: String, speakResponse: Bool) async {
         updateLocalModelStatus()
-        guard localLLMClient.canAttemptResponse else {
-            reportError("Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.", context: "generateResponse")
-            appendMessage(role: .assistant, text: "Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.")
-            return
-        }
-
         isResponding = true
         defer { isResponding = false }
 
@@ -349,6 +341,23 @@ public final class AssistantChatViewModel: ObservableObject {
                 if speakResponse {
                     await speechSpeaker.speak(response)
                 }
+                return
+            }
+
+            if let request = projectToolRequest(for: userText, tools: tools) {
+                let result = try await mcpClient.callTool(name: request.name, arguments: request.arguments)
+                captureA2UITokens(from: result)
+                let response = MCPToolFormatting.formatToolResult(isError: result.isError, text: result.text)
+                appendMessage(role: .assistant, text: response)
+                if speakResponse {
+                    await speechSpeaker.speak(result.text)
+                }
+                return
+            }
+
+            guard localLLMClient.canAttemptResponse else {
+                reportError("Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.", context: "generateResponse")
+                appendMessage(role: .assistant, text: "Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.")
                 return
             }
 
@@ -461,6 +470,84 @@ public final class AssistantChatViewModel: ObservableObject {
         ]
 
         return triggers.contains { normalized.contains($0) }
+    }
+
+    private struct MCPToolRequest {
+        let name: String
+        let arguments: [String: Any]
+    }
+
+    private func projectToolRequest(for text: String, tools: [MCPToolDefinition]) -> MCPToolRequest? {
+        let toolName = "ark.projects.search"
+        guard tools.contains(where: { $0.name == toolName }) else { return nil }
+
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        let projectTerms = [
+            "project",
+            "projects",
+            "repo",
+            "repos",
+            "repository",
+            "repositories"
+        ]
+        let actionTerms = [
+            "all",
+            "available",
+            "find",
+            "list",
+            "look up",
+            "lookup",
+            "get",
+            "query",
+            "search",
+            "show",
+            "what",
+            "which"
+        ]
+
+        guard projectTerms.contains(where: { normalized.contains($0) }),
+              actionTerms.contains(where: { normalized.contains($0) }) else {
+            return nil
+        }
+
+        var arguments: [String: Any] = [
+            "limit": 20,
+            "membership": true
+        ]
+        let query = projectSearchQuery(from: text)
+        if !query.isEmpty {
+            arguments["query"] = query
+        }
+        return MCPToolRequest(name: toolName, arguments: arguments)
+    }
+
+    private func projectSearchQuery(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let markers = [
+            "called ",
+            "named ",
+            "matching ",
+            "for ",
+            "about "
+        ]
+        for marker in markers {
+            guard let range = trimmed.range(of: marker, options: [.caseInsensitive]) else { continue }
+            let suffix = trimmed[range.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`.,?!"))
+            if !suffix.isEmpty,
+               !suffix.lowercased().contains("project") {
+                return suffix
+            }
+        }
+
+        return ""
     }
 
     private func formatToolInventoryResponse(tools: [MCPToolDefinition]) -> String {

@@ -3,13 +3,26 @@
 /// Primary declarations include `AssistantChatScreen`, `AssistantChatView`, and `View`.
 
 import SwiftUI
+import MCPClientKit
 
 /// Presents the assistant Chat Screen interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatScreen: View {
     @StateObject private var model: AssistantChatViewModel
 
-    public init(endpoint: URL? = nil) {
-        _model = StateObject(wrappedValue: AssistantChatViewModel(endpoint: endpoint))
+    public init(
+        endpoint: URL? = nil,
+        contextSummary: String? = nil,
+        defaultProjectID: String? = nil,
+        headerProvider: MCPHeaderProvider? = nil
+    ) {
+        _model = StateObject(
+            wrappedValue: AssistantChatViewModel(
+                endpoint: endpoint,
+                contextSummary: contextSummary,
+                defaultProjectID: defaultProjectID,
+                headerProvider: headerProvider
+            )
+        )
     }
 
     public var body: some View {

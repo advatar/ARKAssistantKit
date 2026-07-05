@@ -13,6 +13,9 @@ let package = Package(
         .library(name: "MCPClientKit", targets: ["MCPClientKit"]),
         .library(name: "ARKAssistantKit", targets: ["ARKAssistantKit"]),
     ],
+    dependencies: [
+        .package(path: "../GemmaKit")
+    ],
     targets: [
         .target(
             name: "MCPClientKit",
@@ -20,7 +23,10 @@ let package = Package(
         ),
         .target(
             name: "ARKAssistantKit",
-            dependencies: ["MCPClientKit"]
+            dependencies: [
+                "MCPClientKit",
+                .product(name: "GemmaKit", package: "GemmaKit", condition: .when(platforms: [.macOS]))
+            ]
         ),
         .testTarget(
             name: "MCPClientKitTests",

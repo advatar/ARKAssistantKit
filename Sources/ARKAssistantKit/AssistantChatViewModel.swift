@@ -64,6 +64,7 @@ public final class AssistantChatViewModel: ObservableObject {
     private var voiceTask: Task<Void, Never>?
     private var voicePartialText: String = ""
     private var voiceFinalText: String = ""
+    private var voiceCaptureGate = AssistantVoiceCaptureGate()
 
     private let clientName: String
     private let clientVersion: String
@@ -148,13 +149,19 @@ public final class AssistantChatViewModel: ObservableObject {
         guard canUseVoice else { return }
         guard !isRecording else { return }
         voiceTask?.cancel()
-        voiceTask = Task { await beginVoiceCapture() }
+        let token = voiceCaptureGate.request()
+        voiceTask = Task { await beginVoiceCapture(token: token) }
     }
 
     public func stopPushToTalk() {
-        guard isRecording else { return }
+        guard voiceCaptureGate.isRequested || isRecording else { return }
+        voiceCaptureGate.cancel()
         voiceTask?.cancel()
-        voiceTask = Task { await endVoiceCaptureAndSubmit() }
+        if isRecording {
+            voiceTask = Task { await endVoiceCaptureAndSubmit() }
+        } else {
+            voiceTask = Task { await cancelPendingVoiceCapture() }
+        }
     }
 
     public func clearCanvasTokens() {
@@ -184,7 +191,7 @@ public final class AssistantChatViewModel: ObservableObject {
         return false
     }
 
-    private func beginVoiceCapture() async {
+    private func beginVoiceCapture(token: UInt) async {
         lastError = nil
         voiceStatusText = nil
         liveTranscriptPreview = ""
@@ -192,14 +199,24 @@ public final class AssistantChatViewModel: ObservableObject {
         voiceFinalText = ""
 
         let micGranted = await requestMicrophoneAccessIfNeeded()
+        guard voiceCaptureGate.permits(token), !Task.isCancelled else {
+            await cancelPendingVoiceCapture()
+            return
+        }
         guard micGranted else {
+            voiceCaptureGate.finish(token)
             reportError("Microphone access is required for push-to-talk.", context: "beginVoiceCapture")
             voiceStatusText = "Mic permission denied"
             return
         }
 
         let speechGranted = await speechToTextEngine.requestSpeechPermission()
+        guard voiceCaptureGate.permits(token), !Task.isCancelled else {
+            await cancelPendingVoiceCapture()
+            return
+        }
         guard speechGranted else {
+            voiceCaptureGate.finish(token)
             reportError("Speech recognition permission is required for push-to-talk.", context: "beginVoiceCapture")
             voiceStatusText = "Speech permission denied"
             return
@@ -234,6 +251,10 @@ public final class AssistantChatViewModel: ObservableObject {
                 }
             )
 
+            guard voiceCaptureGate.permits(token), !Task.isCancelled else {
+                await cancelPendingVoiceCapture()
+                return
+            }
             try micAudioEngine.start { [weak self] buffer in
                 guard let self else { return }
                 do {
@@ -243,17 +264,25 @@ public final class AssistantChatViewModel: ObservableObject {
                 }
             }
 
+            guard voiceCaptureGate.permits(token), !Task.isCancelled else {
+                await cancelPendingVoiceCapture()
+                return
+            }
             isRecording = true
             voiceStatusText = "Listening…"
         } catch {
             micAudioEngine.stop()
             await speechToTextEngine.stop()
-            reportError("Unable to start voice capture: \(error.localizedDescription)", context: "beginVoiceCapture")
-            voiceStatusText = "Recording failed"
+            if voiceCaptureGate.permits(token) {
+                voiceCaptureGate.finish(token)
+                reportError("Unable to start voice capture: \(error.localizedDescription)", context: "beginVoiceCapture")
+                voiceStatusText = "Recording failed"
+            }
         }
     }
 
     private func endVoiceCaptureAndSubmit() async {
+        voiceCaptureGate.cancel()
         isRecording = false
         isTranscribingVoice = true
         voiceStatusText = "Transcribing…"
@@ -262,10 +291,7 @@ public final class AssistantChatViewModel: ObservableObject {
         micAudioEngine.stop()
         await speechToTextEngine.stop()
 
-        let candidate = !voiceFinalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? voiceFinalText
-            : voicePartialText
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.resolvedVoiceTranscript(final: voiceFinalText, partial: voicePartialText)
         liveTranscriptPreview = ""
         voiceFinalText = ""
         voicePartialText = ""
@@ -277,6 +303,24 @@ public final class AssistantChatViewModel: ObservableObject {
 
         voiceStatusText = nil
         submitUserMessage(trimmed, triggeredByVoice: true)
+    }
+
+    private func cancelPendingVoiceCapture() async {
+        micAudioEngine.stop()
+        await speechToTextEngine.stop()
+        isRecording = false
+        liveTranscriptPreview = ""
+        voiceFinalText = ""
+        voicePartialText = ""
+        if !isTranscribingVoice {
+            voiceStatusText = "Voice capture cancelled"
+        }
+    }
+
+    static func resolvedVoiceTranscript(final: String, partial: String) -> String {
+        let finalText = final.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !finalText.isEmpty { return finalText }
+        return partial.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func requestMicrophoneAccessIfNeeded() async -> Bool {

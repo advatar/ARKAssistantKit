@@ -1,5 +1,10 @@
+/// Documents the assistant Mic Audio Engine source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `SendablePCMBuffer` and `AssistantMicAudioEngine`.
+
 import AVFoundation
 
+/// Implements the sendable PCM Buffer type for ARKAssistantKit in the shared Swift packages.
 private final class SendablePCMBuffer: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
 

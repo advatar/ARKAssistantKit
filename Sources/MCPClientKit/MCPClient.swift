@@ -1,5 +1,15 @@
+/// Coordinates MCP Client responsibilities for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `MCPToolDefinition`, `MCPToolCallResult`, and `MCPClient`.
+
 import Foundation
 
+/// Describes the MCP header provider contract used by the ARKAssistantKit module.
+public protocol MCPHeaderProvider: Sendable {
+    func headerFields(refresh: Bool) async throws -> [String: String]
+}
+
+/// Defines the MCP Tool Definition value used by ARKAssistantKit in the shared Swift packages.
 public struct MCPToolDefinition: Sendable, Identifiable {
     public let id = UUID()
     public let name: String
@@ -13,6 +23,7 @@ public struct MCPToolDefinition: Sendable, Identifiable {
     }
 }
 
+/// Models the MCP Tool Call Result data carried through ARKAssistantKit in the shared Swift packages.
 public struct MCPToolCallResult: Sendable {
     public struct ContentItem: Sendable, Equatable {
         public let type: String
@@ -39,6 +50,7 @@ public struct MCPToolCallResult: Sendable {
     }
 }
 
+/// Coordinates MCP Client responsibilities for ARKAssistantKit in the shared Swift packages.
 public actor MCPClient {
     public struct Config: Sendable {
         public let endpoint: URL
@@ -46,19 +58,22 @@ public actor MCPClient {
         public let clientName: String
         public let clientVersion: String
         public let protocolVersion: String
+        public let headerProvider: MCPHeaderProvider?
 
         public init(
             endpoint: URL,
             fallbackEndpoint: URL?,
             clientName: String,
             clientVersion: String,
-            protocolVersion: String
+            protocolVersion: String,
+            headerProvider: MCPHeaderProvider? = nil
         ) {
             self.endpoint = endpoint
             self.fallbackEndpoint = fallbackEndpoint
             self.clientName = clientName
             self.clientVersion = clientVersion
             self.protocolVersion = protocolVersion
+            self.headerProvider = headerProvider
         }
 
         public static func `default`() -> Config {
@@ -68,7 +83,8 @@ public actor MCPClient {
                 fallbackEndpoint: endpoints.fallback,
                 clientName: "ARK",
                 clientVersion: "0.1.0",
-                protocolVersion: "2024-11-05"
+                protocolVersion: "2024-11-05",
+                headerProvider: nil
             )
         }
     }
@@ -98,6 +114,7 @@ public actor MCPClient {
     private var nextId: Int = 1
     private var initialized = false
     private var activeEndpoint: URL
+    private var sessionId: String?
 
     public init(config: Config = .default(), session: URLSession = .shared) {
         self.config = config
@@ -136,10 +153,16 @@ public actor MCPClient {
     }
 
     private static func resolveAppEndpoint(env: [String: String]) -> URL? {
-        let appGroupId = env["ARK_APP_GROUP_ID"] ?? "group.com.covenant"
+        #if os(iOS)
+        let appGroupId: String? = nil
+        #else
+        let appGroupId = env["ARK_APP_GROUP_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        #endif
 
         let base: URL
-        if let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
+        if let appGroupId,
+           !appGroupId.isEmpty,
+           let groupURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
             base = groupURL.appendingPathComponent("Library/Application Support", isDirectory: true)
         } else {
             base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -177,23 +200,25 @@ public actor MCPClient {
 
     public func callTool(name: String, arguments: [String: Any]) async throws -> MCPToolCallResult {
         try await ensureInitialized()
-        let response = try await sendRequest(method: "tools/call", params: [
+        let params: [String: Any] = [
             "name": name,
             "arguments": arguments
-        ])
+        ]
+        let response = try await sendRequest(method: "tools/call", params: params)
+        let result = try Self.parseToolCallResult(from: response)
 
-        guard let result = response["result"] as? [String: Any] else {
-            throw MCPError.decodeFailed("Missing tool result")
+        if config.headerProvider != nil,
+           result.isError,
+           Self.isLikelyAuthenticationMessage(result.text) {
+            let retryResponse = try await sendRequest(
+                method: "tools/call",
+                params: params,
+                forceAuthRefresh: true
+            )
+            return try Self.parseToolCallResult(from: retryResponse)
         }
 
-        let isError = result["isError"] as? Bool ?? false
-        let content = result["content"] as? [[String: Any]] ?? []
-        let text = Self.renderContentText(from: content)
-        return MCPToolCallResult(
-            text: text,
-            isError: isError,
-            content: Self.parseContentItems(from: content)
-        )
+        return result
     }
 
     private func ensureInitialized() async throws {
@@ -209,14 +234,19 @@ public actor MCPClient {
         initialized = true
     }
 
-    private func sendRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
+    private func sendRequest(
+        method: String,
+        params: [String: Any],
+        forceAuthRefresh: Bool = false
+    ) async throws -> [String: Any] {
         if let fallback = config.fallbackEndpoint {
             if activeEndpoint.absoluteString == config.endpoint.absoluteString,
                let response = try await sendRequestWithFallback(
                 primary: activeEndpoint,
                 fallback: fallback,
                 method: method,
-                params: params
+                params: params,
+                forceAuthRefresh: forceAuthRefresh
                ) {
                 return response
             }
@@ -225,24 +255,54 @@ public actor MCPClient {
                 primary: activeEndpoint,
                 fallback: config.endpoint,
                 method: method,
-                params: params
+                params: params,
+                forceAuthRefresh: forceAuthRefresh
                ) {
                 return response
             }
         }
 
-        return try await sendRequest(method: method, params: params, endpoint: activeEndpoint)
+        return try await sendRequest(
+            method: method,
+            params: params,
+            endpoint: activeEndpoint,
+            forceAuthRefresh: forceAuthRefresh
+        )
     }
 
-    private func sendRequestWithFallback(primary: URL, fallback: URL, method: String, params: [String: Any]) async throws -> [String: Any]? {
+    private func sendRequestWithFallback(
+        primary: URL,
+        fallback: URL,
+        method: String,
+        params: [String: Any],
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any]? {
         do {
-            return try await sendRequest(method: method, params: params, endpoint: primary)
+            return try await sendRequest(
+                method: method,
+                params: params,
+                endpoint: primary,
+                forceAuthRefresh: forceAuthRefresh
+            )
         } catch {
             guard shouldRetry(error) else { throw error }
         }
 
         do {
-            let response = try await sendRequest(method: method, params: params, endpoint: fallback)
+            let previousSessionId = sessionId
+            sessionId = nil
+            let response: [String: Any]
+            do {
+                response = try await sendRequest(
+                    method: method,
+                    params: params,
+                    endpoint: fallback,
+                    forceAuthRefresh: forceAuthRefresh
+                )
+            } catch {
+                sessionId = previousSessionId
+                throw error
+            }
             activeEndpoint = fallback
             if method != "initialize" {
                 initialized = false
@@ -253,7 +313,12 @@ public actor MCPClient {
         }
     }
 
-    private func sendRequest(method: String, params: [String: Any], endpoint: URL) async throws -> [String: Any] {
+    private func sendRequest(
+        method: String,
+        params: [String: Any],
+        endpoint: URL,
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any] {
         let id = nextId
         nextId += 1
 
@@ -265,23 +330,74 @@ public actor MCPClient {
         ]
 
         let body = try JSONSerialization.data(withJSONObject: payload, options: [])
+        return try await performRequest(
+            body: body,
+            endpoint: endpoint,
+            allowAuthRefresh: !forceAuthRefresh,
+            forceAuthRefresh: forceAuthRefresh
+        )
+    }
+
+    private func performRequest(
+        body: Data,
+        endpoint: URL,
+        allowAuthRefresh: Bool,
+        forceAuthRefresh: Bool
+    ) async throws -> [String: Any] {
+        let request = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: forceAuthRefresh)
+        do {
+            return try await execute(request: request)
+        } catch let error as MCPError {
+            if allowAuthRefresh,
+               error.isAuthenticationFailure,
+               config.headerProvider != nil {
+                let retryRequest = try await buildRequest(endpoint: endpoint, body: body, refreshAuth: true)
+                return try await execute(request: retryRequest)
+            }
+            throw error
+        }
+    }
+
+    private func buildRequest(endpoint: URL, body: Data, refreshAuth: Bool) async throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw MCPError.requestFailed("HTTP \(http.statusCode)")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        if let sessionId {
+            request.setValue(sessionId, forHTTPHeaderField: "mcp-session-id")
         }
+        if let headerProvider = config.headerProvider {
+            let headers = try await headerProvider.headerFields(refresh: refreshAuth)
+            for (field, value) in headers {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+        }
+        return request
+    }
 
-        let object = try JSONSerialization.jsonObject(with: data, options: [])
-        guard let json = object as? [String: Any] else {
+    private func execute(request: URLRequest) async throws -> [String: Any] {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
             throw MCPError.invalidResponse
         }
 
+        if let returnedSessionId = http.value(forHTTPHeaderField: "mcp-session-id"),
+           !returnedSessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sessionId = returnedSessionId
+        }
+
+        if !(200..<300).contains(http.statusCode) {
+            throw Self.httpError(statusCode: http.statusCode, data: data)
+        }
+
+        let json = try Self.decodeResponseObject(from: data)
         if let error = json["error"] as? [String: Any] {
             let message = error["message"] as? String ?? "Unknown error"
+            let code = error["code"] as? Int
+            if let code {
+                throw MCPError.serverError("[\(code)] \(message)")
+            }
             throw MCPError.serverError(message)
         }
 
@@ -298,6 +414,87 @@ public actor MCPClient {
             }
         }
         return false
+    }
+
+    static func decodeResponseObject(from data: Data) throws -> [String: Any] {
+        if let object = try? Self.parseJSONObject(from: data) {
+            return object
+        }
+        if let eventData = Self.extractEventStreamJSONData(from: data),
+           let object = try? Self.parseJSONObject(from: eventData) {
+            return object
+        }
+        throw MCPError.invalidResponse
+    }
+
+    static func extractEventStreamJSONData(from data: Data) -> Data? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var payloadLines: [String] = []
+
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            guard line.hasPrefix("data:") else { continue }
+            let value = String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            guard !value.isEmpty else { continue }
+            payloadLines.append(value)
+        }
+
+        guard !payloadLines.isEmpty else { return nil }
+        return payloadLines.joined(separator: "\n").data(using: .utf8)
+    }
+
+    private static func parseJSONObject(from data: Data) throws -> [String: Any]? {
+        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        return object as? [String: Any]
+    }
+
+    static func parseToolCallResult(from response: [String: Any]) throws -> MCPToolCallResult {
+        guard let result = response["result"] as? [String: Any] else {
+            throw MCPError.decodeFailed("Missing tool result")
+        }
+
+        let isError = result["isError"] as? Bool ?? false
+        let content = result["content"] as? [[String: Any]] ?? []
+        let text = Self.renderContentText(from: content)
+        return MCPToolCallResult(
+            text: text,
+            isError: isError,
+            content: Self.parseContentItems(from: content)
+        )
+    }
+
+    static func isLikelyAuthenticationMessage(_ message: String) -> Bool {
+        let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+
+        let authIndicators = [
+            "http 401",
+            "http 403",
+            "access token is invalid or expired",
+            "authentication required",
+            "authorization required",
+            "invalid or expired",
+            "invalid token",
+            "missing token",
+            "private-token",
+            "refresh token",
+            "token expired",
+            "token invalid",
+            "unauthorized",
+            "insufficient scope",
+            "insufficient scopes"
+        ]
+
+        return authIndicators.contains { normalized.contains($0) }
+    }
+
+    private static func httpError(statusCode: Int, data: Data) -> MCPError {
+        if let payload = try? decodeResponseObject(from: data),
+           let error = payload["error"] as? [String: Any],
+           let message = error["message"] as? String,
+           !message.isEmpty {
+            return .requestFailed("HTTP \(statusCode): \(message)")
+        }
+        return .requestFailed("HTTP \(statusCode)")
     }
 
     private static func encodeJSON(_ value: Any) -> String? {
@@ -345,5 +542,19 @@ public actor MCPClient {
             }
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// Extends `MCPClient.MCPError` with behavior used by the ARKAssistantKit module.
+private extension MCPClient.MCPError {
+    var isAuthenticationFailure: Bool {
+        switch self {
+        case .serverError(let message):
+            return MCPClient.isLikelyAuthenticationMessage(message)
+        case .requestFailed(let message):
+            return MCPClient.isLikelyAuthenticationMessage(message)
+        default:
+            return false
+        }
     }
 }

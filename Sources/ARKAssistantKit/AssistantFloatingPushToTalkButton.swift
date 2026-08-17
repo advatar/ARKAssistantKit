@@ -1,5 +1,10 @@
+/// Collects UI state and presentation logic for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantFloatingPushToTalkButton`.
+
 import SwiftUI
 
+/// Presents the assistant Floating Push To Talk Button interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantFloatingPushToTalkButton: View {
     @ObservedObject private var model: AssistantChatViewModel
     private let size: CGFloat

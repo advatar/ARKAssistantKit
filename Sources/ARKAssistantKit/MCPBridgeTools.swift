@@ -1,10 +1,62 @@
+/// Documents the MCP Bridge Tools source in ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `MCPToolCatalog`, `MCPListToolsArguments`, `MCPListToolsTool`, and `MCPCallToolArguments`.
+
 import Foundation
 
 import MCPClientKit
 
+/// Models the MCP default tool context data carried through the ARKAssistantKit module.
+struct MCPDefaultToolContext: Sendable {
+    let projectID: String?
+
+    init(projectID: String? = nil) {
+        let trimmed = projectID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.projectID = (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+}
+
+/// Provides the MCP default tool arguments namespace used by the ARKAssistantKit module.
+enum MCPDefaultToolArguments {
+    static func mergedArguments(
+        for tool: MCPToolDefinition?,
+        arguments: [String: Any],
+        defaults: MCPDefaultToolContext
+    ) -> [String: Any] {
+        guard let projectID = defaults.projectID,
+              supportsProjectID(tool),
+              !containsNonEmptyValue(forKey: "project_id", in: arguments) else {
+            return arguments
+        }
+
+        var merged = arguments
+        merged["project_id"] = projectID
+        return merged
+    }
+
+    private static func supportsProjectID(_ tool: MCPToolDefinition?) -> Bool {
+        guard let tool,
+              let data = tool.inputSchemaJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+              let properties = object["properties"] as? [String: Any] else {
+            return false
+        }
+        return properties["project_id"] != nil
+    }
+
+    private static func containsNonEmptyValue(forKey key: String, in arguments: [String: Any]) -> Bool {
+        guard let value = arguments[key] else { return false }
+        if let string = value as? String {
+            return !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return true
+    }
+}
+
 #if canImport(FoundationModels)
 import FoundationModels
 
+/// Implements the MCP Tool Catalog type for ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 actor MCPToolCatalog: Sendable {
     private let mcp: MCPClient
@@ -25,6 +77,7 @@ actor MCPToolCatalog: Sendable {
     }
 }
 
+/// Defines the MCP List Tools Arguments value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct MCPListToolsArguments {
@@ -35,6 +88,7 @@ struct MCPListToolsArguments {
     var maxResults: Int?
 }
 
+/// Defines the MCP List Tools Tool value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 struct MCPListToolsTool: FoundationModels.Tool {
     typealias Arguments = MCPListToolsArguments
@@ -102,6 +156,7 @@ struct MCPListToolsTool: FoundationModels.Tool {
     }
 }
 
+/// Defines the MCP Call Tool Arguments value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct MCPCallToolArguments {
@@ -112,6 +167,7 @@ struct MCPCallToolArguments {
     var json: String?
 }
 
+/// Defines the MCP Call Tool Tool value used by ARKAssistantKit in the shared Swift packages.
 @available(iOS 26.0, macOS 26.0, *)
 struct MCPCallToolTool: FoundationModels.Tool {
     typealias ResultObserver = @Sendable (MCPToolCallResult) -> Void
@@ -124,10 +180,17 @@ struct MCPCallToolTool: FoundationModels.Tool {
     private let mcp: MCPClient
     private let catalog: MCPToolCatalog?
     private let resultObserver: ResultObserver?
+    private let defaults: MCPDefaultToolContext
 
-    init(mcp: MCPClient, catalog: MCPToolCatalog? = nil, resultObserver: ResultObserver? = nil) {
+    init(
+        mcp: MCPClient,
+        catalog: MCPToolCatalog? = nil,
+        defaults: MCPDefaultToolContext = MCPDefaultToolContext(),
+        resultObserver: ResultObserver? = nil
+    ) {
         self.mcp = mcp
         self.catalog = catalog
+        self.defaults = defaults
         self.resultObserver = resultObserver
     }
 
@@ -143,11 +206,17 @@ struct MCPCallToolTool: FoundationModels.Tool {
         }
 
         let rawJSON = arguments.json ?? "{}"
-        let dict = MCPToolFormatting.decodeArguments(from: rawJSON)
+        let decodedArguments = MCPToolFormatting.decodeArguments(from: rawJSON)
         let resolvedName = await resolvedToolName(for: requestedName)
         guard let toolName = resolvedName else {
             return unknownToolResponse(for: requestedName)
         }
+        let toolDefinition = await resolvedToolDefinition(for: toolName)
+        let dict = MCPDefaultToolArguments.mergedArguments(
+            for: toolDefinition,
+            arguments: decodedArguments,
+            defaults: defaults
+        )
 
         do {
             let result = try await mcp.callTool(name: toolName, arguments: dict)
@@ -189,6 +258,14 @@ struct MCPCallToolTool: FoundationModels.Tool {
         return nil
     }
 
+    private func resolvedToolDefinition(for toolName: String) async -> MCPToolDefinition? {
+        guard let catalog,
+              let tools = try? await catalog.tools() else {
+            return nil
+        }
+        return tools.first(where: { $0.name == toolName })
+    }
+
     private func unknownToolResponse(for requestedName: String) -> String {
         [
             "mcp.isError=true",
@@ -200,6 +277,7 @@ struct MCPCallToolTool: FoundationModels.Tool {
     }
 }
 
+/// Defines MCP Tool Formatting cases used by ARKAssistantKit in the shared Swift packages.
 enum MCPToolFormatting {
     private static let maxToolOutputChars = 6_000
 

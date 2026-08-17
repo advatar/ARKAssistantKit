@@ -1,3 +1,7 @@
+/// Collects UI state and presentation logic for ARKAssistantKit in the shared Swift packages.
+///
+/// Primary declarations include `AssistantChatViewModel` and `WeakMainActorModel`.
+
 import Foundation
 import Combine
 import SwiftUI
@@ -9,6 +13,7 @@ import MCPClientKit
 import FoundationModels
 #endif
 
+/// Implements the assistant Chat View Model type for ARKAssistantKit in the shared Swift packages.
 @MainActor
 public final class AssistantChatViewModel: ObservableObject {
     public struct Message: Identifiable, Equatable {
@@ -69,12 +74,33 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientName: String
     private let clientVersion: String
     private let protocolVersion: String
+    private let conversationContext: String?
+    private let defaultToolContext: MCPDefaultToolContext
 
-    public init(endpoint: URL? = nil, clientName: String = "ARK", clientVersion: String = "0.1.0", protocolVersion: String = "2024-11-05") {
+    public init(
+        endpoint: URL? = nil,
+        clientName: String = "ARK",
+        clientVersion: String = "0.1.0",
+        protocolVersion: String = "2024-11-05",
+        contextSummary: String? = nil,
+        defaultProjectID: String? = nil,
+        headerProvider: MCPHeaderProvider? = nil
+    ) {
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.protocolVersion = protocolVersion
-        self.mcpClient = MCPClient(config: AssistantChatViewModel.makeConfig(endpoint: endpoint, clientName: clientName, clientVersion: clientVersion, protocolVersion: protocolVersion))
+        self.conversationContext = contextSummary?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.defaultToolContext = MCPDefaultToolContext(projectID: defaultProjectID)
+        self.mcpClient = MCPClient(
+            config: AssistantChatViewModel.makeConfig(
+                endpoint: endpoint,
+                clientName: clientName,
+                clientVersion: clientVersion,
+                protocolVersion: protocolVersion,
+                headerProvider: headerProvider
+            )
+        )
         updateLocalModelStatus()
 
         #if os(iOS)
@@ -87,8 +113,16 @@ public final class AssistantChatViewModel: ObservableObject {
         Task { await self.refreshTools() }
     }
 
-    public func setEndpoint(_ endpoint: URL?) {
-        mcpClient = MCPClient(config: AssistantChatViewModel.makeConfig(endpoint: endpoint, clientName: clientName, clientVersion: clientVersion, protocolVersion: protocolVersion))
+    public func setEndpoint(_ endpoint: URL?, headerProvider: MCPHeaderProvider? = nil) {
+        mcpClient = MCPClient(
+            config: AssistantChatViewModel.makeConfig(
+                endpoint: endpoint,
+                clientName: clientName,
+                clientVersion: clientVersion,
+                protocolVersion: protocolVersion,
+                headerProvider: headerProvider
+            )
+        )
         toolCache.removeAll(keepingCapacity: true)
         lastError = nil
 
@@ -102,7 +136,13 @@ public final class AssistantChatViewModel: ObservableObject {
         Task { await self.refreshTools() }
     }
 
-    private static func makeConfig(endpoint: URL?, clientName: String, clientVersion: String, protocolVersion: String) -> MCPClient.Config {
+    private static func makeConfig(
+        endpoint: URL?,
+        clientName: String,
+        clientVersion: String,
+        protocolVersion: String,
+        headerProvider: MCPHeaderProvider?
+    ) -> MCPClient.Config {
         let endpoints = MCPClient.resolveEndpoints()
         let resolved = endpoint ?? endpoints.primary
         return MCPClient.Config(
@@ -110,7 +150,8 @@ public final class AssistantChatViewModel: ObservableObject {
             fallbackEndpoint: endpoint == nil ? endpoints.fallback : nil,
             clientName: clientName,
             clientVersion: clientVersion,
-            protocolVersion: protocolVersion
+            protocolVersion: protocolVersion,
+            headerProvider: headerProvider
         )
     }
 
@@ -439,12 +480,21 @@ public final class AssistantChatViewModel: ObservableObject {
 
         let history = lines.reversed().joined(separator: "\n")
         let trimmedUserText = truncateForPrompt(userText, maxChars: maxUserChars)
+        let contextBlock = {
+            guard let conversationContext, !conversationContext.isEmpty else {
+                return "Project context: (none)"
+            }
+            return "Project context:\n\(conversationContext)"
+        }()
 
         return """
         You are ARK Assistant. Keep responses concise and actionable.
         Chat naturally. Use MCP tools only when ARK data or actions are needed.
+        Treat project context as the default target for MCP tool arguments unless the user specifies a different project.
 
-        Conversation (most recent last, may be truncated):
+        \(contextBlock)
+
+        Conversation history (most recent last, may be truncated):
         \(history.isEmpty ? "(none)" : history)
 
         User: \(trimmedUserText)
@@ -495,7 +545,7 @@ public final class AssistantChatViewModel: ObservableObject {
             let weakModel = WeakMainActorModel(self)
             let mcpTools: [any FoundationModels.Tool] = [
                 MCPListToolsTool(catalog: catalog),
-                MCPCallToolTool(mcp: mcpClient, catalog: catalog) { result in
+                MCPCallToolTool(mcp: mcpClient, catalog: catalog, defaults: defaultToolContext) { result in
                     Task { @MainActor in
                         weakModel.value?.captureA2UITokens(from: result)
                     }
@@ -507,6 +557,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 You are an ARK assistant.
                 For greetings and general chat, reply directly without tools.
                 Only call MCP tools when user intent requires ARK data/actions.
+                If the prompt includes project context, treat it as the default project for tool arguments unless the user overrides it.
                 When tools are needed, call `mcp_list_tools` with a focused query, then `mcp_call_tool`.
                 """
             )
@@ -569,6 +620,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
 }
 
+/// Implements the weak Main Actor Model type for ARKAssistantKit in the shared Swift packages.
 private final class WeakMainActorModel: @unchecked Sendable {
     weak var value: AssistantChatViewModel?
 

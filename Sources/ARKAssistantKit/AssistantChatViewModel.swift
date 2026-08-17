@@ -9,10 +9,6 @@ import AVFoundation
 
 import MCPClientKit
 
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
-
 /// Implements the assistant Chat View Model type for ARKAssistantKit in the shared Swift packages.
 @MainActor
 public final class AssistantChatViewModel: ObservableObject {
@@ -66,6 +62,7 @@ public final class AssistantChatViewModel: ObservableObject {
     private let micAudioEngine = AssistantMicAudioEngine()
     private let speechToTextEngine = AssistantSpeechToTextEngine()
     private let speechSpeaker = AssistantSpeechSpeaker()
+    private let localLLMClient = AssistantLocalLLMClient()
     private var voiceTask: Task<Void, Never>?
     private var voicePartialText: String = ""
     private var voiceFinalText: String = ""
@@ -156,14 +153,12 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public var canSend: Bool {
-        isLocalFoundationModelAvailable
-            && !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isResponding
     }
 
     public var canUseVoice: Bool {
-        isLocalFoundationModelAvailable
-            && !isResponding
+        !isResponding
             && !isTranscribingVoice
     }
 
@@ -210,26 +205,13 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     private func updateLocalModelStatus() {
-        if isLocalFoundationModelAvailable {
-            localModelText = "Model: Apple Foundation Models"
-            return
-        }
-        localModelText = "Model: unavailable (requires iOS/macOS 26+)"
+        localModelText = localLLMClient.statusText()
     }
 
     private func submitUserMessage(_ text: String, triggeredByVoice: Bool) {
         lastError = nil
         appendMessage(role: .user, text: text)
         Task { await self.generateResponse(for: text, speakResponse: triggeredByVoice) }
-    }
-
-    private var isLocalFoundationModelAvailable: Bool {
-        #if canImport(FoundationModels)
-        if #available(iOS 26.0, macOS 26.0, *) {
-            return true
-        }
-        #endif
-        return false
     }
 
     private func beginVoiceCapture(token: UInt) async {
@@ -383,12 +365,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     private func generateResponse(for userText: String, speakResponse: Bool) async {
-        guard isLocalFoundationModelAvailable else {
-            reportError("Assistant requires iOS/macOS 26+ (Apple Foundation Models).", context: "generateResponse")
-            appendMessage(role: .assistant, text: "Assistant requires iOS/macOS 26 or later.")
-            return
-        }
-
+        updateLocalModelStatus()
         isResponding = true
         defer { isResponding = false }
 
@@ -411,9 +388,36 @@ public final class AssistantChatViewModel: ObservableObject {
                 return
             }
 
+            if let response = Self.navigationLinkResponse(for: userText) {
+                appendMessage(role: .assistant, text: response)
+                if speakResponse {
+                    await speechSpeaker.speak(response)
+                }
+                return
+            }
+
+            if let request = projectToolRequest(for: userText, tools: tools) {
+                let result = try await mcpClient.callTool(name: request.name, arguments: request.arguments)
+                captureA2UITokens(from: result)
+                let response = MCPToolFormatting.formatToolResult(isError: result.isError, text: result.text)
+                appendMessage(role: .assistant, text: response)
+                if speakResponse {
+                    await speechSpeaker.speak(result.text)
+                }
+                return
+            }
+
+            guard localLLMClient.canAttemptResponse else {
+                reportError("Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.", context: "generateResponse")
+                appendMessage(role: .assistant, text: "Assistant requires a local model: Gemma, SwiftLM, Ollama, or Apple Foundation Models.")
+                return
+            }
+
             let assistantId = UUID()
             messages.append(Message(id: assistantId, role: .assistant, text: "", timestamp: Date()))
-            try await streamFoundationModelsResponse(userText: userText, tools: tools, assistantId: assistantId)
+            let response = try await generateLocalLLMResponse(userText: userText, tools: tools)
+            updateMessage(id: assistantId, text: response.text)
+            localModelText = "Model: \(response.providerLabel)"
             if speakResponse, let reply = messages.first(where: { $0.id == assistantId })?.text {
                 await speechSpeaker.speak(reply)
             }
@@ -520,6 +524,123 @@ public final class AssistantChatViewModel: ObservableObject {
         return triggers.contains { normalized.contains($0) }
     }
 
+    nonisolated static func navigationLinkResponse(for text: String) -> String? {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        let actionTerms = [
+            "go to",
+            "navigate",
+            "open",
+            "show me",
+            "take me"
+        ]
+        guard actionTerms.contains(where: { normalized.contains($0) }) else {
+            return nil
+        }
+
+        let destinations: [(terms: [String], title: String, url: String)] = [
+            (["settings", "preferences"], "Settings", "ark://navigate/settings"),
+            (["dashboard", "home"], "Dashboard", "ark://navigate/dashboard"),
+            (["mailbox", "inbox", "shares"], "Mailbox", "ark://navigate/mailbox"),
+            (["people", "team", "collaborators"], "People", "ark://navigate/people"),
+            (["proofs", "proof"], "Proofs", "ark://navigate/proofs"),
+            (["sessions", "studio sessions", "studio"], "Sessions", "ark://navigate/sessions"),
+            (["timeline", "activity"], "Timeline", "ark://navigate/timeline"),
+            (["workflows", "workflow"], "Workflows", "ark://navigate/workflows"),
+            (["help", "support"], "Help", "ark://navigate/help"),
+            (["projects", "project list"], "Projects", "ark://navigate/projects")
+        ]
+
+        guard let destination = destinations.first(where: { destination in
+            destination.terms.contains(where: { normalized.contains($0) })
+        }) else {
+            return nil
+        }
+
+        return "Open [\(destination.title)](\(destination.url))."
+    }
+
+    private struct MCPToolRequest {
+        let name: String
+        let arguments: [String: Any]
+    }
+
+    private func projectToolRequest(for text: String, tools: [MCPToolDefinition]) -> MCPToolRequest? {
+        let toolName = "ark.projects.search"
+        guard tools.contains(where: { $0.name == toolName }) else { return nil }
+
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        let projectTerms = [
+            "project",
+            "projects",
+            "repo",
+            "repos",
+            "repository",
+            "repositories"
+        ]
+        let actionTerms = [
+            "all",
+            "available",
+            "find",
+            "list",
+            "look up",
+            "lookup",
+            "get",
+            "query",
+            "search",
+            "show",
+            "what",
+            "which"
+        ]
+
+        guard projectTerms.contains(where: { normalized.contains($0) }),
+              actionTerms.contains(where: { normalized.contains($0) }) else {
+            return nil
+        }
+
+        var arguments: [String: Any] = [
+            "limit": 20,
+            "membership": true
+        ]
+        let query = projectSearchQuery(from: text)
+        if !query.isEmpty {
+            arguments["query"] = query
+        }
+        return MCPToolRequest(name: toolName, arguments: arguments)
+    }
+
+    private func projectSearchQuery(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let markers = [
+            "called ",
+            "named ",
+            "matching ",
+            "for ",
+            "about "
+        ]
+        for marker in markers {
+            guard let range = trimmed.range(of: marker, options: [.caseInsensitive]) else { continue }
+            let suffix = trimmed[range.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`.,?!"))
+            if !suffix.isEmpty,
+               !suffix.lowercased().contains("project") {
+                return suffix
+            }
+        }
+
+        return ""
+    }
+
     private func formatToolInventoryResponse(tools: [MCPToolDefinition]) -> String {
         guard !tools.isEmpty else {
             return "No MCP tools are currently available from the connected server."
@@ -537,45 +658,20 @@ public final class AssistantChatViewModel: ObservableObject {
         return (["Available MCP tools (\(sorted.count)):" ] + lines).joined(separator: "\n")
     }
 
-    private func streamFoundationModelsResponse(userText: String, tools: [MCPToolDefinition], assistantId: UUID) async throws {
-        #if canImport(FoundationModels)
-        if #available(iOS 26.0, macOS 26.0, *) {
-            let prompt = buildFoundationPrompt(with: userText)
-            let catalog = MCPToolCatalog(mcp: mcpClient, seed: tools)
-            let weakModel = WeakMainActorModel(self)
-            let mcpTools: [any FoundationModels.Tool] = [
-                MCPListToolsTool(catalog: catalog),
-                MCPCallToolTool(mcp: mcpClient, catalog: catalog, defaults: defaultToolContext) { result in
-                    Task { @MainActor in
-                        weakModel.value?.captureA2UITokens(from: result)
-                    }
-                }
-            ]
-            let session = LanguageModelSession(
-                tools: mcpTools,
-                instructions: """
-                You are an ARK assistant.
-                For greetings and general chat, reply directly without tools.
-                Only call MCP tools when user intent requires ARK data/actions.
-                If the prompt includes project context, treat it as the default project for tool arguments unless the user overrides it.
-                When tools are needed, call `mcp_list_tools` with a focused query, then `mcp_call_tool`.
-                """
-            )
-            let stream = session.streamResponse {
-                Prompt(prompt)
-            }
-            for try await partial in stream {
-                let text = String(describing: partial.content)
-                updateMessage(id: assistantId, text: text)
-            }
-            return
-        }
-        #endif
-
-        let _ = tools
-        let _ = assistantId
-        let _ = userText
-        throw MCPClient.MCPError.requestFailed("Foundation Models not available")
+    private func generateLocalLLMResponse(userText: String, tools: [MCPToolDefinition]) async throws -> AssistantLocalLLMClient.Response {
+        let prompt = buildFoundationPrompt(with: userText)
+        let toolHint = tools.isEmpty
+            ? "No MCP tools are currently connected."
+            : "Connected MCP tools: \(tools.prefix(20).map(\.name).joined(separator: ", "))."
+        return try await localLLMClient.response(
+            prompt: "\(prompt)\n\n\(toolHint)",
+            instructions: """
+            You are an ARK assistant. Keep responses concise and actionable.
+            For greetings and general chat, reply directly.
+            If the user asks for ARK data or actions and a tool would be required, say which connected MCP tool/action is needed instead of pretending you executed it.
+            Treat project context as the default target for tool arguments unless the user specifies a different project.
+            """
+        )
     }
 
     private func captureA2UITokens(from result: MCPToolCallResult) {

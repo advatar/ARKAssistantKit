@@ -7,7 +7,7 @@ import Speech
 
 /// Streams microphone audio and emits partial/final text.
 /// Uses SpeechAnalyzer/SpeechTranscriber on iOS/macOS 26+ and SFSpeechRecognizer fallback on older OS versions.
-final class AssistantSpeechToTextEngine {
+public final class AssistantSpeechToTextEngine {
     enum STTError: LocalizedError {
         case speechRecognizerDenied
         case recognizerUnavailable
@@ -61,6 +61,42 @@ final class AssistantSpeechToTextEngine {
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status == .authorized)
             }
+        }
+    }
+
+    /// Prepares Apple's on-device speech assets without opening the microphone.
+    ///
+    /// This is intentionally separate from `start`: live sessions should not
+    /// block on the first speech turn while iOS/macOS installs a language
+    /// asset. `SpeechAnalyzer`/`AssetInventory` remain the source of truth, so
+    /// ARK never downloads speech models from its own servers.
+    @available(iOS 26.0, macOS 26.0, *)
+    @MainActor
+    public static func prepareAppleSpeechAssets(
+        preferredLocale: Locale = .current,
+        onProgress: @escaping @MainActor (Progress?) -> Void = { _ in }
+    ) async {
+        guard SpeechTranscriber.isAvailable else { return }
+        let supported = Array(await SpeechTranscriber.supportedLocales)
+        guard !supported.isEmpty else { return }
+        let locale = resolveLocale(preferred: preferredLocale, supported: supported)
+        let transcriber = SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [.volatileResults],
+            attributeOptions: []
+        )
+        do {
+            try await ensureAppleSpeechModel(
+                for: transcriber,
+                locale: locale,
+                onDownloadProgress: onProgress
+            )
+        } catch {
+            // Preparation is opportunistic. The foreground start path retries
+            // through the same Apple-managed asset request and reports errors
+            // when speech is actually requested.
+            onProgress(nil)
         }
     }
 
@@ -214,7 +250,7 @@ final class AssistantSpeechToTextEngine {
         state.analyzer = SpeechAnalyzer(modules: [transcriber])
         modernState = state
 
-        try await ensureModernModel(for: transcriber, locale: locale, onDownloadProgress: onDownloadProgress)
+        try await Self.ensureAppleSpeechModel(for: transcriber, locale: locale, onDownloadProgress: onDownloadProgress)
         state.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
 
         state.inputSequence = AsyncStream<AnalyzerInput> { continuation in
@@ -273,7 +309,7 @@ final class AssistantSpeechToTextEngine {
 
     @available(iOS 26.0, macOS 26.0, *)
     @MainActor
-    private func ensureModernModel(
+    private static func ensureAppleSpeechModel(
         for module: SpeechTranscriber,
         locale: Locale,
         onDownloadProgress: @escaping @MainActor (Progress?) -> Void

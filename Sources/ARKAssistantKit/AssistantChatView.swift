@@ -3,13 +3,26 @@
 /// Primary declarations include `AssistantChatScreen`, `AssistantChatView`, and `View`.
 
 import SwiftUI
+import MCPClientKit
 
 /// Presents the assistant Chat Screen interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatScreen: View {
     @StateObject private var model: AssistantChatViewModel
 
-    public init(endpoint: URL? = nil) {
-        _model = StateObject(wrappedValue: AssistantChatViewModel(endpoint: endpoint))
+    public init(
+        endpoint: URL? = nil,
+        contextSummary: String? = nil,
+        defaultProjectID: String? = nil,
+        headerProvider: MCPHeaderProvider? = nil
+    ) {
+        _model = StateObject(
+            wrappedValue: AssistantChatViewModel(
+                endpoint: endpoint,
+                contextSummary: contextSummary,
+                defaultProjectID: defaultProjectID,
+                headerProvider: headerProvider
+            )
+        )
     }
 
     public var body: some View {
@@ -155,7 +168,7 @@ public struct AssistantChatView: View {
     private func messageRow(_ message: AssistantChatViewModel.Message) -> some View {
         HStack {
             if message.role == .user { Spacer() }
-            Text(message.text)
+            messageText(message.text)
                 .font(.body)
                 .foregroundColor(.primary)
                 .padding(8)
@@ -164,6 +177,18 @@ public struct AssistantChatView: View {
                 .frame(maxWidth: 300, alignment: message.role == .user ? .trailing : .leading)
             if message.role == .assistant { Spacer() }
         }
+    }
+
+    private func messageText(_ text: String) -> Text {
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .inlineOnlyPreservingWhitespace
+            )
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 
     @ViewBuilder

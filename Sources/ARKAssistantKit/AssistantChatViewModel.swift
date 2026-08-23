@@ -200,6 +200,13 @@ public final class AssistantChatViewModel: ObservableObject {
             && !isTranscribingVoice
     }
 
+    /// Retries tool discovery when the last attempt failed or never ran —
+    /// e.g. the pet opened before sign-in produced an auth token.
+    public func refreshToolsIfNeeded() async {
+        guard toolCache.isEmpty else { return }
+        await refreshTools()
+    }
+
     public func refreshTools() async {
         statusText = "MCP: connecting…"
         do {
@@ -207,8 +214,11 @@ public final class AssistantChatViewModel: ObservableObject {
             toolCache = tools
             statusText = "MCP: \(tools.count) tools"
         } catch {
+            // Background discovery: reflect the state in the status line without
+            // raising lastError — local actions and the LLM work without MCP, and
+            // user-initiated sends surface their own errors.
             statusText = "MCP: unavailable"
-            reportError(error.localizedDescription, context: "refreshTools")
+            Self.logConsole("Tool discovery failed [refreshTools]: \(error.localizedDescription)")
         }
     }
 

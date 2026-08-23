@@ -13,14 +13,18 @@ public struct AssistantChatScreen: View {
         endpoint: URL? = nil,
         contextSummary: String? = nil,
         defaultProjectID: String? = nil,
-        headerProvider: MCPHeaderProvider? = nil
+        headerProvider: MCPHeaderProvider? = nil,
+        actionCatalog: AssistantActionCatalog = AssistantActionCatalog(actions: []),
+        actionExecutor: AssistantActionExecutor? = nil
     ) {
         _model = StateObject(
             wrappedValue: AssistantChatViewModel(
                 endpoint: endpoint,
                 contextSummary: contextSummary,
                 defaultProjectID: defaultProjectID,
-                headerProvider: headerProvider
+                headerProvider: headerProvider,
+                actionCatalog: actionCatalog,
+                actionExecutor: actionExecutor
             )
         )
     }
@@ -123,13 +127,18 @@ public struct AssistantChatView: View {
                 Text("Canvas")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                if !model.canvasTokens.isEmpty {
+                if !model.canvasTokens.isEmpty || model.responseVisual != nil {
                     Button("Clear") {
                         model.clearCanvasTokens()
+                        model.clearResponseVisual()
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
                 }
+            }
+
+            if let visual = model.responseVisual {
+                A2UINativeRenderer(surface: visual, onAction: handleVisualAction)
             }
 
             if model.canvasTokens.isEmpty {
@@ -145,10 +154,14 @@ public struct AssistantChatView: View {
                                 Text(token.source)
                                     .font(.caption.weight(.semibold))
                                     .foregroundColor(.secondary)
-                                Text(token.payload)
-                                    .font(.caption.monospaced())
-                                    .foregroundColor(.primary)
-                                    .textSelection(.enabled)
+                                if let surface = A2UISurface.fromCanvasPayload(token.payload) {
+                                    A2UINativeRenderer(surface: surface, onAction: handleVisualAction)
+                                } else {
+                                    Text(token.payload)
+                                        .font(.caption.monospaced())
+                                        .foregroundColor(.primary)
+                                        .textSelection(.enabled)
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
@@ -163,6 +176,14 @@ public struct AssistantChatView: View {
         .padding(10)
         .background(chatBackground)
         .cornerRadius(8)
+    }
+
+    /// Button presses inside an A2UI surface map onto catalog actions by name.
+    private func handleVisualAction(_ name: String) {
+        guard let action = model.actionCatalog.action(named: name) else { return }
+        Task {
+            await model.performAction(AssistantActionInvocation(action: action, source: .text))
+        }
     }
 
     private func messageRow(_ message: AssistantChatViewModel.Message) -> some View {

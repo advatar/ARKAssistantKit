@@ -11,6 +11,14 @@ final class AssistantSpeechSpeaker: NSObject {
     private var finishContinuation: CheckedContinuation<Void, Never>?
     private var activeUtteranceID: ObjectIdentifier?
 
+    /// `true` while an utterance is in flight. Observed by the view model to derive the voice phase.
+    private(set) var isSpeaking = false {
+        didSet {
+            if isSpeaking != oldValue { onSpeakingChange?(isSpeaking) }
+        }
+    }
+    var onSpeakingChange: ((Bool) -> Void)?
+
     override init() {
         super.init()
         synthesizer.delegate = self
@@ -32,11 +40,13 @@ final class AssistantSpeechSpeaker: NSObject {
         utterance.voice = voice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
 
+        isSpeaking = true
         await withCheckedContinuation { continuation in
             activeUtteranceID = ObjectIdentifier(utterance)
             finishContinuation = continuation
             synthesizer.speak(utterance)
         }
+        isSpeaking = false
     }
 
     func stop() {
@@ -63,6 +73,7 @@ final class AssistantSpeechSpeaker: NSObject {
         let continuation = finishContinuation
         finishContinuation = nil
         activeUtteranceID = nil
+        isSpeaking = false
         continuation?.resume()
     }
 }

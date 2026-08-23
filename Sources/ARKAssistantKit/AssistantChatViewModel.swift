@@ -56,6 +56,17 @@ public final class AssistantChatViewModel: ObservableObject {
     @Published public private(set) var voiceStatusText: String?
     @Published public private(set) var liveTranscriptPreview: String = ""
     @Published public private(set) var canvasTokens: [CanvasToken] = []
+    /// Latest A2UI visual produced by an action outcome or composed from a reply.
+    @Published public private(set) var responseVisual: A2UISurface?
+    /// High-level voice state for the pet and chrome.
+    @Published public private(set) var voicePhase: AssistantVoicePhase = .ready
+    @Published public private(set) var isSpeaking = false
+    @Published public private(set) var isMicrophoneMuted = false
+    /// Last executed action invocation, if any (for audit and UI).
+    @Published public private(set) var lastActionInvocation: AssistantActionInvocation?
+
+    public let actionCatalog: AssistantActionCatalog
+    public weak var actionExecutor: AssistantActionExecutor?
 
     private var mcpClient: MCPClient
     private var toolCache: [MCPToolDefinition] = []
@@ -67,6 +78,7 @@ public final class AssistantChatViewModel: ObservableObject {
     private var voicePartialText: String = ""
     private var voiceFinalText: String = ""
     private var voiceCaptureGate = AssistantVoiceCaptureGate()
+    private var phaseCancellables: Set<AnyCancellable> = []
 
     private let clientName: String
     private let clientVersion: String
@@ -81,8 +93,12 @@ public final class AssistantChatViewModel: ObservableObject {
         protocolVersion: String = "2024-11-05",
         contextSummary: String? = nil,
         defaultProjectID: String? = nil,
-        headerProvider: MCPHeaderProvider? = nil
+        headerProvider: MCPHeaderProvider? = nil,
+        actionCatalog: AssistantActionCatalog = AssistantActionCatalog(actions: []),
+        actionExecutor: AssistantActionExecutor? = nil
     ) {
+        self.actionCatalog = actionCatalog
+        self.actionExecutor = actionExecutor
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.protocolVersion = protocolVersion
@@ -99,6 +115,7 @@ public final class AssistantChatViewModel: ObservableObject {
             )
         )
         updateLocalModelStatus()
+        wireVoicePhase()
 
         #if os(iOS)
         if endpoint == nil {
@@ -108,6 +125,27 @@ public final class AssistantChatViewModel: ObservableObject {
         #endif
 
         Task { await self.refreshTools() }
+    }
+
+    private func wireVoicePhase() {
+        speechSpeaker.onSpeakingChange = { [weak self] speaking in
+            self?.isSpeaking = speaking
+        }
+        Publishers.CombineLatest4($isRecording, $isResponding, $isTranscribingVoice, $isSpeaking)
+            .map { recording, responding, transcribing, speaking -> AssistantVoicePhase in
+                AssistantVoicePhase.derive(
+                    isRecording: recording,
+                    isResponding: responding,
+                    isTranscribing: transcribing,
+                    isSpeaking: speaking
+                )
+            }
+            .removeDuplicates()
+            .sink { [weak self] phase in
+                guard let self, self.voicePhase != phase else { return }
+                self.voicePhase = phase
+            }
+            .store(in: &phaseCancellables)
     }
 
     public func setEndpoint(_ endpoint: URL?, headerProvider: MCPHeaderProvider? = nil) {
@@ -182,6 +220,10 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func startPushToTalk() {
+        guard !isMicrophoneMuted else {
+            voiceStatusText = "Microphone is muted"
+            return
+        }
         guard canUseVoice else { return }
         guard !isRecording else { return }
         voiceTask?.cancel()
@@ -202,6 +244,64 @@ public final class AssistantChatViewModel: ObservableObject {
 
     public func clearCanvasTokens() {
         canvasTokens.removeAll()
+    }
+
+    public func clearResponseVisual() {
+        responseVisual = nil
+    }
+
+    /// Interrupts any in-flight speech.
+    public func stopSpeaking() {
+        speechSpeaker.stop()
+    }
+
+    /// Toggles the "microphone off" state. When muted, push-to-talk is refused and any active
+    /// capture is cancelled.
+    public func toggleMicrophoneMuted() {
+        isMicrophoneMuted.toggle()
+        if isMicrophoneMuted {
+            if voiceCaptureGate.isRequested || isRecording {
+                voiceCaptureGate.cancel()
+                voiceTask?.cancel()
+                voiceTask = Task { await cancelPendingVoiceCapture() }
+            }
+            voiceStatusText = "Microphone muted"
+        } else if voiceStatusText == "Microphone muted" || voiceStatusText == "Microphone is muted" {
+            voiceStatusText = nil
+        }
+    }
+
+    /// Performs a catalog action through the host executor and records the outcome in the chat.
+    /// Does not speak; callers decide whether to vocalise the result.
+    @discardableResult
+    public func performAction(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
+        guard let actionExecutor else {
+            let outcome = AssistantActionOutcome.failure("\(invocation.action.title) isn't available right now.")
+            appendMessage(role: .assistant, text: outcome.message)
+            return outcome
+        }
+        lastActionInvocation = invocation
+        let outcome = await actionExecutor.perform(invocation)
+        appendMessage(role: .assistant, text: outcome.message)
+        responseVisual = AssistantVisualComposer.surface(for: outcome, action: invocation.action)
+        if outcome.isFailure {
+            reportError(outcome.message, context: "performAction(\(invocation.action.name))")
+        }
+        return outcome
+    }
+
+    /// Resolves an utterance against the catalog and performs it when an executor is attached.
+    /// Returns `nil` when no action matched (the caller should fall through to the normal ladder).
+    private func performResolvedAction(for text: String, speakResponse: Bool) async -> AssistantActionOutcome? {
+        guard actionExecutor != nil,
+              let invocation = actionCatalog.resolve(utterance: text, source: speakResponse ? .voice : .text) else {
+            return nil
+        }
+        let outcome = await performAction(invocation)
+        if speakResponse {
+            await speechSpeaker.speak(outcome.message)
+        }
+        return outcome
     }
 
     private func updateLocalModelStatus() {
@@ -369,6 +469,10 @@ public final class AssistantChatViewModel: ObservableObject {
         isResponding = true
         defer { isResponding = false }
 
+        if await performResolvedAction(for: userText, speakResponse: speakResponse) != nil {
+            return
+        }
+
         do {
             let forceToolRefresh = shouldHandleToolInventoryRequest(userText)
             let tools = forceToolRefresh
@@ -416,8 +520,25 @@ public final class AssistantChatViewModel: ObservableObject {
             let assistantId = UUID()
             messages.append(Message(id: assistantId, role: .assistant, text: "", timestamp: Date()))
             let response = try await generateLocalLLMResponse(userText: userText, tools: tools)
-            updateMessage(id: assistantId, text: response.text)
             localModelText = "Model: \(response.providerLabel)"
+
+            if actionExecutor != nil,
+               !actionCatalog.actions.isEmpty,
+               let invocation = actionCatalog.invocation(
+                   fromModelReply: response.text,
+                   source: speakResponse ? .voice : .text
+               ) {
+                // Replace the raw JSON placeholder with the action outcome.
+                messages.removeAll { $0.id == assistantId }
+                let outcome = await performAction(invocation)
+                if speakResponse {
+                    await speechSpeaker.speak(outcome.message)
+                }
+                return
+            }
+
+            updateMessage(id: assistantId, text: response.text)
+            responseVisual = AssistantVisualComposer.surface(forReply: response.text)
             if speakResponse, let reply = messages.first(where: { $0.id == assistantId })?.text {
                 await speechSpeaker.speak(reply)
             }
@@ -663,14 +784,25 @@ public final class AssistantChatViewModel: ObservableObject {
         let toolHint = tools.isEmpty
             ? "No MCP tools are currently connected."
             : "Connected MCP tools: \(tools.prefix(20).map(\.name).joined(separator: ", "))."
-        return try await localLLMClient.response(
-            prompt: "\(prompt)\n\n\(toolHint)",
-            instructions: """
+        var instructions = """
             You are an ARK assistant. Keep responses concise and actionable.
             For greetings and general chat, reply directly.
             If the user asks for ARK data or actions and a tool would be required, say which connected MCP tool/action is needed instead of pretending you executed it.
             Treat project context as the default target for tool arguments unless the user specifies a different project.
             """
+        if actionExecutor != nil, !actionCatalog.actions.isEmpty {
+            instructions += """
+
+
+            The app can perform these actions:
+            \(actionCatalog.promptSummary())
+
+            When the user is asking the app to do one of these, reply ONLY with JSON of the form {"action":"<name>","arguments":{}} (fill arguments from the user's words, keys as listed). Otherwise answer normally in plain text.
+            """
+        }
+        return try await localLLMClient.response(
+            prompt: "\(prompt)\n\n\(toolHint)",
+            instructions: instructions
         )
     }
 
@@ -714,6 +846,30 @@ public final class AssistantChatViewModel: ObservableObject {
         return false
     }
 
+}
+
+/// High-level voice state derived from the view model's flags. Drives the pet and chat chrome.
+public enum AssistantVoicePhase: Equatable, Sendable {
+    case ready
+    case listening
+    case thinking
+    case speaking
+    case unavailable
+
+    /// `unavailable` is reserved for hosts that know voice cannot work (no model, no permission);
+    /// the view model itself only reports the four live states. Muting is orthogonal: see
+    /// `AssistantChatViewModel.isMicrophoneMuted`.
+    public static func derive(
+        isRecording: Bool,
+        isResponding: Bool,
+        isTranscribing: Bool,
+        isSpeaking: Bool
+    ) -> AssistantVoicePhase {
+        if isRecording { return .listening }
+        if isSpeaking { return .speaking }
+        if isResponding || isTranscribing { return .thinking }
+        return .ready
+    }
 }
 
 /// Implements the weak Main Actor Model type for ARKAssistantKit in the shared Swift packages.

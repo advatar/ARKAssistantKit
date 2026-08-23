@@ -48,7 +48,7 @@ public final class AssistantChatViewModel: ObservableObject {
     @Published public private(set) var messages: [Message] = []
     @Published public var inputText: String = ""
     @Published public private(set) var isResponding = false
-    @Published public private(set) var statusText: String = "MCP: not connected"
+    @Published public private(set) var statusText: String = "Remote tools: connecting"
     @Published public private(set) var localModelText: String = "Model: unavailable"
     @Published public private(set) var lastError: String?
     @Published public private(set) var isRecording = false
@@ -119,7 +119,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
         #if os(iOS)
         if endpoint == nil {
-            statusText = "MCP: configure endpoint"
+            statusText = "Remote tools: configure endpoint"
             return
         }
         #endif
@@ -163,7 +163,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
         #if os(iOS)
         if endpoint == nil {
-            statusText = "MCP: configure endpoint"
+            statusText = "Remote tools: configure endpoint"
             return
         }
         #endif
@@ -208,16 +208,16 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func refreshTools() async {
-        statusText = "MCP: connecting…"
+        statusText = "Remote tools: connecting…"
         do {
             let tools = try await mcpClient.listTools()
             toolCache = tools
-            statusText = "MCP: \(tools.count) tools"
+            statusText = "Remote tools: \(tools.count) connected"
         } catch {
             // Background discovery: reflect the state in the status line without
             // raising lastError — local actions and the LLM work without MCP, and
             // user-initiated sends surface their own errors.
-            statusText = "MCP: unavailable"
+            statusText = "Remote tools: offline — app actions still work"
             Self.logConsole("Tool discovery failed [refreshTools]: \(error.localizedDescription)")
         }
     }
@@ -490,7 +490,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 : (toolCache.isEmpty ? try await mcpClient.listTools() : toolCache)
             if toolCache.isEmpty || forceToolRefresh {
                 toolCache = tools
-                statusText = "MCP: \(tools.count) tools"
+                statusText = "Remote tools: \(tools.count) connected"
             }
 
             if shouldHandleToolInventoryRequest(userText) {

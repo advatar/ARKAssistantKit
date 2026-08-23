@@ -18,6 +18,8 @@ final class AssistantSpeechSpeaker: NSObject {
         }
     }
     var onSpeakingChange: ((Bool) -> Void)?
+    /// Last logged voice, so the selection is announced once, not per utterance.
+    private static var loggedVoiceIdentifier: String??
 
     override init() {
         super.init()
@@ -33,8 +35,15 @@ final class AssistantSpeechSpeaker: NSObject {
 
         let requestedLanguage = language?.replacingOccurrences(of: "_", with: "-")
             ?? Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
-        let voice = AVSpeechSynthesisVoice(language: requestedLanguage)
+        // Personal Voice > the owner's Spoken Content selection > best quality.
+        let voice = AssistantVoiceSelection.preferredVoiceIdentifier()
+            .flatMap(AVSpeechSynthesisVoice.init(identifier:))
+            ?? AVSpeechSynthesisVoice(language: requestedLanguage)
             ?? AVSpeechSynthesisVoice(language: "en-US")
+        if Self.loggedVoiceIdentifier != voice?.identifier {
+            Self.loggedVoiceIdentifier = voice?.identifier
+            print("[ARKAssistantKit] voice selection: \(voice?.identifier ?? "AVFoundation default")")
+        }
 
         let utterance = AVSpeechUtterance(string: trimmed)
         utterance.voice = voice

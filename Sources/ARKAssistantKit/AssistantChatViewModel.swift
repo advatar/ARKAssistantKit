@@ -300,6 +300,19 @@ public final class AssistantChatViewModel: ObservableObject {
         return outcome
     }
 
+    /// Executes an action on behalf of a native model tool call: no chat
+    /// message is appended (the model's final reply is the chat message), but
+    /// the visual and invocation bookkeeping still happen.
+    func performActionForModelTool(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
+        guard let actionExecutor else {
+            return .failure("\(invocation.action.title) isn't available right now.")
+        }
+        lastActionInvocation = invocation
+        let outcome = await actionExecutor.perform(invocation)
+        responseVisual = AssistantVisualComposer.surface(for: outcome, action: invocation.action)
+        return outcome
+    }
+
     /// Resolves an utterance against the catalog and performs it when an executor is attached.
     /// Returns `nil` when no action matched (the caller should fall through to the normal ladder).
     private func performResolvedAction(for text: String, speakResponse: Bool) async -> AssistantActionOutcome? {
@@ -820,8 +833,36 @@ public final class AssistantChatViewModel: ObservableObject {
         }
         return try await localLLMClient.response(
             prompt: "\(prompt)\n\n\(toolHint)",
-            instructions: instructions
+            instructions: instructions,
+            toolAware: makeNativeToolRequest(speakResponse: false)
         )
+    }
+
+    /// Binds the action catalog as native FoundationModels tools when the
+    /// platform supports it; other providers keep the JSON-reply protocol.
+    private func makeNativeToolRequest(speakResponse: Bool) -> AssistantLocalLLMClient.ToolAwareRequest? {
+#if canImport(FoundationModels)
+        guard actionExecutor != nil, !actionCatalog.actions.isEmpty else { return nil }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return nil }
+        let source: AssistantActionInvocation.Source = speakResponse ? .voice : .text
+        let instructions = """
+        You are the ARK assistant. Keep responses concise and speakable.
+        Use the provided tools to perform app actions and to answer questions about the user's own projects, sessions, requests, and evidence - never guess that data. After a tool runs, reply with one short sentence based on its result.
+        For greetings and general conversation, answer directly without tools.
+        """
+        return AssistantLocalLLMClient.ToolAwareRequest(instructions: instructions) { [weak self] in
+            guard let self else { return [] }
+            return self.actionCatalog.actions.map { action in
+                AssistantActionFoundationTool(action: action, source: source) { [weak self] invocation in
+                    await self?.performActionForModelTool(invocation)
+                        ?? .failure("Assistant unavailable.")
+                }
+            }
+        }
+#else
+        let _ = speakResponse
+        return nil
+#endif
     }
 
     private func captureA2UITokens(from result: MCPToolCallResult) {

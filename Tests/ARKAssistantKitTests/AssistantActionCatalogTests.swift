@@ -93,3 +93,27 @@ struct AssistantActionCatalogTests {
         #expect(summary.contains("- evidence.note: Logs a note to the session. (args: note)"))
     }
 }
+
+#if canImport(FoundationModels)
+import FoundationModels
+
+struct AssistantActionFoundationToolTests {
+    @Test @MainActor func toolExposesActionNameParametersAndConfirmGuard() {
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
+        let action = AssistantAction(
+            name: "protection.stop",
+            title: "Stop Protecting",
+            description: "Stops protecting a folder.",
+            category: .protection,
+            phrases: ["stop protecting {project}"],
+            parameters: [AssistantActionParameter(name: "project", title: "Project name", isRequired: true)],
+            requiresConfirmation: true
+        )
+        let tool = AssistantActionFoundationTool(action: action, source: .voice) { _ in
+            AssistantActionOutcome(message: "ok")
+        }
+        #expect(tool.name == "protection.stop")
+        #expect(tool.description.contains("Destructive"))
+    }
+}
+#endif

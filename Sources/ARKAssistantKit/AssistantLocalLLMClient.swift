@@ -66,11 +66,28 @@ final class AssistantLocalLLMClient {
         return Self.swiftLMEnabled || Self.ollamaEnabled || Self.appleFoundationModelsAvailable
     }
 
-    func response(prompt: String, instructions: String) async throws -> Response {
+    /// Native tool binding for providers that support it (Apple Foundation
+    /// Models). `makeTools` returns `[any FoundationModels.Tool]` erased to
+    /// `[Any]` so the request type needs no FoundationModels availability.
+    struct ToolAwareRequest {
+        let instructions: String
+        let makeTools: @MainActor () -> [Any]
+
+        init(instructions: String, makeTools: @escaping @MainActor () -> [Any]) {
+            self.instructions = instructions
+            self.makeTools = makeTools
+        }
+    }
+
+    func response(prompt: String, instructions: String, toolAware: ToolAwareRequest? = nil) async throws -> Response {
         if let response = try? await gemmaKitResponse(prompt: prompt, instructions: instructions) {
             return response
         }
-        if let response = try? await appleFoundationModelsResponse(prompt: prompt, instructions: instructions) {
+        if let response = try? await appleFoundationModelsResponse(
+            prompt: prompt,
+            instructions: instructions,
+            toolAware: toolAware
+        ) {
             return response
         }
         if let response = try? await openAICompatibleResponse(
@@ -189,19 +206,35 @@ final class AssistantLocalLLMClient {
         return Response(text: text, providerLabel: "Ollama: \(model)")
     }
 
-    private func appleFoundationModelsResponse(prompt: String, instructions: String) async throws -> Response {
+    private func appleFoundationModelsResponse(
+        prompt: String,
+        instructions: String,
+        toolAware: ToolAwareRequest? = nil
+    ) async throws -> Response {
 #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             guard Self.appleFoundationModelsAvailable else { throw ClientError.unavailable }
-            let session = LanguageModelSession(instructions: Instructions(instructions))
+            let session: LanguageModelSession
+            var providerLabel = "Apple Foundation Models"
+            if let toolAware,
+               let tools = toolAware.makeTools() as? [any FoundationModels.Tool],
+               !tools.isEmpty {
+                // Native tool-calling: the model invokes catalog actions
+                // directly instead of the JSON-reply protocol.
+                session = LanguageModelSession(tools: tools, instructions: Instructions(toolAware.instructions))
+                providerLabel = "Apple Foundation Models (native tools)"
+            } else {
+                session = LanguageModelSession(instructions: Instructions(instructions))
+            }
             let response = try await session.respond(to: Prompt(prompt), options: GenerationOptions(temperature: 0.2))
             let text = String(describing: response.content).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw ClientError.emptyResponse }
-            return Response(text: text, providerLabel: "Apple Foundation Models")
+            return Response(text: text, providerLabel: providerLabel)
         }
 #endif
         let _ = prompt
         let _ = instructions
+        let _ = toolAware
         throw ClientError.unavailable
     }
 

@@ -117,3 +117,13 @@ struct AssistantActionFoundationToolTests {
     }
 }
 #endif
+
+struct AssistantModelChoiceTests {
+    @Test func choicesRoundTripAndHaveTitles() {
+        for choice in AssistantModelChoice.allCases {
+            #expect(AssistantModelChoice(rawValue: choice.rawValue) == choice)
+            #expect(!choice.title.isEmpty)
+        }
+        #expect(AssistantModelChoice(rawValue: "nonsense") == nil)
+    }
+}

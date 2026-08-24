@@ -8,6 +8,39 @@ import GemmaKit
 import FoundationModels
 #endif
 
+/// Developer-facing override for which local model answers the assistant.
+/// `.auto` keeps the ladder (Gemma → Apple FM → SwiftLM → Ollama); a specific
+/// choice pins that provider so intelligence can be compared side by side.
+/// Interpretation mechanism follows the provider: Apple FM binds the action
+/// catalog as native FoundationModels tools, the others use the JSON protocol.
+public enum AssistantModelChoice: String, CaseIterable, Sendable {
+    case auto
+    case gemma
+    case apple
+    case swiftlm
+    case ollama
+
+    public static let defaultsKey = "ark.assistant.model"
+
+    public static var current: AssistantModelChoice {
+        get {
+            UserDefaults.standard.string(forKey: defaultsKey)
+                .flatMap(AssistantModelChoice.init(rawValue:)) ?? .auto
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+
+    public var title: String {
+        switch self {
+        case .auto: return "Auto (Gemma first)"
+        case .gemma: return "Gemma 4 (local)"
+        case .apple: return "Apple Foundation Models"
+        case .swiftlm: return "SwiftLM (dev)"
+        case .ollama: return "Ollama (dev)"
+        }
+    }
+}
+
 @MainActor
 final class AssistantLocalLLMClient {
     struct Response: Sendable {
@@ -43,6 +76,10 @@ final class AssistantLocalLLMClient {
 #endif
 
     func statusText() -> String {
+        let choice = AssistantModelChoice.current
+        if choice != .auto {
+            return "Model: \(choice.title) (pinned)"
+        }
 #if os(macOS) && canImport(GemmaKit)
         if (try? GemmaModelLocator().resolveModelPath()) != nil {
             return "Model: Gemma 4 (local)"
@@ -80,6 +117,27 @@ final class AssistantLocalLLMClient {
     }
 
     func response(prompt: String, instructions: String, toolAware: ToolAwareRequest? = nil) async throws -> Response {
+        switch AssistantModelChoice.current {
+        case .auto:
+            break
+        case .gemma:
+            return try await gemmaKitResponse(prompt: prompt, instructions: instructions)
+        case .apple:
+            return try await appleFoundationModelsResponse(prompt: prompt, instructions: instructions, toolAware: toolAware)
+        case .swiftlm:
+            return try await openAICompatibleResponse(
+                baseURL: Self.swiftLMBaseURL,
+                modelOverride: Self.swiftLMModelOverride,
+                providerPrefix: "SwiftLM",
+                timeout: Self.swiftLMTimeout,
+                prompt: prompt,
+                instructions: instructions,
+                enabled: true
+            )
+        case .ollama:
+            return try await ollamaResponse(prompt: prompt, instructions: instructions)
+        }
+
         if let response = try? await gemmaKitResponse(prompt: prompt, instructions: instructions) {
             return response
         }

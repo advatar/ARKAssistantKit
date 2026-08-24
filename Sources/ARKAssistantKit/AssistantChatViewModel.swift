@@ -510,7 +510,11 @@ public final class AssistantChatViewModel: ObservableObject {
                 return
             }
 
-            if let request = projectToolRequest(for: userText, tools: tools) {
+            // The local action catalog owns questions about the user's own
+            // projects; the legacy remote project search only serves the
+            // standalone (no-executor) assistant.
+            if actionExecutor == nil,
+               let request = projectToolRequest(for: userText, tools: tools) {
                 let result = try await mcpClient.callTool(name: request.name, arguments: request.arguments)
                 captureA2UITokens(from: result)
                 let response = MCPToolFormatting.formatToolResult(isError: result.isError, text: result.text)

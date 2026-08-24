@@ -362,23 +362,24 @@ enum MCPToolFormatting {
     }
 
     static func formatToolResult(isError: Bool, text: String) -> String {
-        let header = "mcp.isError=\(isError)"
+        // People read this in the chat: no protocol headers, just the result.
+        let header = isError ? "The remote tool reported a problem." : ""
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return header }
+        guard !trimmed.isEmpty else {
+            return isError ? header : "The remote tool returned no output."
+        }
 
         if trimmed.count <= maxToolOutputChars {
-            return ([header, trimmed]).joined(separator: "\n")
+            return [header, trimmed].filter { !$0.isEmpty }.joined(separator: "\n")
         }
 
         let prefix = String(trimmed.prefix(maxToolOutputChars))
         let omitted = trimmed.count - maxToolOutputChars
         return [
             header,
-            "mcp.truncated=true",
-            "mcp.omittedChars=\(omitted)",
             prefix,
-            "...(truncated)"
-        ].joined(separator: "\n")
+            "… (\(omitted) more characters omitted)"
+        ].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 }
 #endif

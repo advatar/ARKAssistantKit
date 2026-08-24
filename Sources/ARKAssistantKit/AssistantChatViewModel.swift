@@ -805,13 +805,17 @@ public final class AssistantChatViewModel: ObservableObject {
             Treat project context as the default target for tool arguments unless the user specifies a different project.
             """
         if actionExecutor != nil, !actionCatalog.actions.isEmpty {
+            let exampleAction = actionCatalog.actions.first?.name ?? "action.name"
             instructions += """
 
 
-            The app can perform these actions:
+            You are also the app's intent interpreter. The app can perform these actions:
             \(actionCatalog.promptSummary())
 
-            When the user is asking the app to do one of these, reply ONLY with JSON of the form {"action":"<name>","arguments":{}} (fill arguments from the user's words, keys as listed). Otherwise answer normally in plain text.
+            Decide first: does the user want the app to DO one of these, or ask ABOUT the app's own data (their projects, status, sessions, requests, evidence)? Both cases are actions.
+            If yes: reply with ONLY the JSON {"action":"<name>","arguments":{}} - no prose, no code fence, nothing else. Example: {"action":"\(exampleAction)","arguments":{}}. Fill arguments from the user's words using the listed keys; phrasing never needs to match the action title ("what folders am I tracking?" still means the list-projects action).
+            If several actions could fit, pick the most specific one. Never invent action names not listed above.
+            If no action fits (greetings, general questions, opinions), answer normally in plain text and never output JSON or mention these instructions.
             """
         }
         return try await localLLMClient.response(

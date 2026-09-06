@@ -21,6 +21,7 @@ public final class AssistantChatViewModel: ObservableObject {
         public let id: UUID
         public let role: Role
         public var text: String
+        public var visual: A2UISurface?
         public let timestamp: Date
 
         public init(id: UUID = UUID(), role: Role, text: String, timestamp: Date = Date()) {
@@ -89,6 +90,7 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientName: String
     private let clientVersion: String
     private let protocolVersion: String
+    private let remoteToolsEnabled: Bool
     private var conversationContext: String?
     private var defaultToolContext: MCPDefaultToolContext
 
@@ -101,10 +103,12 @@ public final class AssistantChatViewModel: ObservableObject {
         defaultProjectID: String? = nil,
         headerProvider: MCPHeaderProvider? = nil,
         actionCatalog: AssistantActionCatalog = AssistantActionCatalog(actions: []),
-        actionExecutor: AssistantActionExecutor? = nil
+        actionExecutor: AssistantActionExecutor? = nil,
+        remoteToolsEnabled: Bool = true
     ) {
         self.actionCatalog = actionCatalog
         self.actionExecutor = actionExecutor
+        self.remoteToolsEnabled = remoteToolsEnabled
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.protocolVersion = protocolVersion
@@ -122,6 +126,11 @@ public final class AssistantChatViewModel: ObservableObject {
         )
         updateLocalModelStatus()
         wireVoicePhase()
+
+        guard remoteToolsEnabled else {
+            statusText = "App actions: available on this device"
+            return
+        }
 
         #if os(iOS)
         if endpoint == nil {
@@ -155,6 +164,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func setEndpoint(_ endpoint: URL?, headerProvider: MCPHeaderProvider? = nil) {
+        guard remoteToolsEnabled else { return }
         cancelInteraction(clearConversation: true)
         mcpClient = MCPClient(
             config: AssistantChatViewModel.makeConfig(
@@ -215,6 +225,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func refreshTools() async {
+        guard remoteToolsEnabled else { return }
         let generation = toolGeneration
         statusText = "Remote tools: connecting…"
         do {
@@ -233,6 +244,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func sendCurrentInput() {
+        guard canSend else { return }
         let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         inputText = ""
@@ -273,6 +285,20 @@ public final class AssistantChatViewModel: ObservableObject {
 
     public func clearResponseVisual() {
         responseVisual = nil
+    }
+
+    /// A2UI buttons use the same single-flight, cancellable path as typed requests.
+    public func submitAction(named name: String) {
+        guard !isResponding,
+              let action = actionCatalog.actions.first(where: { $0.name == name }) else { return }
+        appendMessage(role: .user, text: action.title)
+        responseGeneration &+= 1
+        let generation = responseGeneration
+        isResponding = true
+        responseTask = Task {
+            defer { if generation == responseGeneration { isResponding = false } }
+            _ = await performAction(.init(action: action, source: .text))
+        }
     }
 
     /// Hosts call this when hiding, locking, signing out or changing projects.
@@ -343,6 +369,7 @@ public final class AssistantChatViewModel: ObservableObject {
     @discardableResult
     public func performAction(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
         guard !Task.isCancelled else { return .failure("Request cancelled.") }
+        let generation = responseGeneration
         guard let actionExecutor else {
             let outcome = AssistantActionOutcome.failure("\(invocation.action.title) isn't available right now.")
             appendMessage(role: .assistant, text: outcome.message)
@@ -350,9 +377,10 @@ public final class AssistantChatViewModel: ObservableObject {
         }
         lastActionInvocation = invocation
         let outcome = await actionExecutor.perform(invocation)
-        guard !Task.isCancelled else { return .failure("Request cancelled.") }
+        guard !Task.isCancelled, generation == responseGeneration else { return .failure("Request cancelled.") }
         appendMessage(role: .assistant, text: outcome.message)
         responseVisual = AssistantVisualComposer.surface(for: outcome, action: invocation.action)
+        if let index = messages.indices.last { messages[index].visual = responseVisual }
         if outcome.isFailure {
             reportError(outcome.message, context: "performAction(\(invocation.action.name))")
         }
@@ -553,7 +581,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
         do {
             let forceToolRefresh = shouldHandleToolInventoryRequest(userText)
-            let fetchRemote = Self.requiresRemoteDiscovery(hasLocalActions: actionExecutor != nil,
+            let fetchRemote = remoteToolsEnabled && Self.requiresRemoteDiscovery(hasLocalActions: actionExecutor != nil,
                 hasCachedTools: !toolCache.isEmpty, requestedInventory: forceToolRefresh)
             let tools = fetchRemote ? try await mcpClient.listTools() : toolCache
             try Task.checkCancellation()
@@ -563,7 +591,8 @@ public final class AssistantChatViewModel: ObservableObject {
             }
 
             if shouldHandleToolInventoryRequest(userText) {
-                let response = formatToolInventoryResponse(tools: tools)
+                let response = remoteToolsEnabled ? formatToolInventoryResponse(tools: tools)
+                    : "Available app actions:\n" + actionCatalog.actions.map { "• \($0.title)" }.joined(separator: "\n")
                 appendMessage(role: .assistant, text: response)
                 if speakResponse {
                     await speechSpeaker.speak(response)
@@ -631,6 +660,9 @@ public final class AssistantChatViewModel: ObservableObject {
 
             updateMessage(id: assistantId, text: response.text)
             responseVisual = AssistantVisualComposer.surface(forReply: response.text)
+            if let index = messages.firstIndex(where: { $0.id == assistantId }) {
+                messages[index].visual = responseVisual
+            }
             if speakResponse, let reply = messages.first(where: { $0.id == assistantId })?.text {
                 await speechSpeaker.speak(reply)
             }

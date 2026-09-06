@@ -115,7 +115,7 @@ struct A2UIComponentView: View {
                     onAction?(name)
                 }
             } label: {
-                Text(resolved(component.label).isEmpty ? "Action" : resolved(component.label))
+                Text(buttonLabel)
             }
             .buttonStyle(.bordered)
             .disabled(onAction == nil || component.action == nil)
@@ -135,6 +135,15 @@ struct A2UIComponentView: View {
         }
     }
 
+    private var buttonLabel: String {
+        let label = resolved(component.label)
+        if !label.isEmpty { return label }
+        if let child = childComponents.first, child.componentName == "Text" {
+            return resolved(child.text)
+        }
+        return "Action"
+    }
+
     @ViewBuilder
     private var childViews: some View {
         ForEach(childComponents, id: \.id) { child in
@@ -152,7 +161,7 @@ struct A2UIComponentView: View {
 
     private func font(for variant: String?) -> Font {
         switch variant {
-        case "title": return .headline
+        case "title", "h1", "h2", "h3", "h4", "h5": return .headline
         case "subtitle": return .subheadline.weight(.semibold)
         case "caption", "secondary": return .caption
         case "mono": return .body.monospaced()

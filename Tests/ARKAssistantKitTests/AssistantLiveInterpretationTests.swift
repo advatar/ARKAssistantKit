@@ -9,6 +9,26 @@ import Testing
 @MainActor
 struct AssistantLiveInterpretationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["ARK_ASSISTANT_LIVE_MODEL_TEST"] == "1"))
+    func appleProviderRetainsConversationContextWithoutReplayingEarlierActions() async throws {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        #expect(SystemLanguageModel.default.isAvailable)
+        guard SystemLanguageModel.default.isAvailable else { return }
+        let response = try await AssistantLocalLLMClient().appleFoundationModelsResponse(
+            prompt: """
+                Host: ARK on iOS.
+                Conversation history:
+                User: I play the acoustic guitar.
+                Assistant: We can capture your acoustic guitar contributions.
+                User: Open Live Session.
+                Assistant: The Live Session view was opened.
+                """,
+            instructions: "Answer the current user, using conversation context.",
+            actionRequest: .init(utterance: "Which instrument did I say I play?", catalog: ARKAssistantActions.catalog))
+        #expect(response.text.localizedCaseInsensitiveContains("guitar"))
+        #expect(!response.permitsActionExecution)
+        #expect(ARKAssistantActions.catalog.invocation(fromModelReply: response.text, source: .text) == nil)
+    }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["ARK_ASSISTANT_LIVE_MODEL_TEST"] == "1"))
     func appleModelInterpretsParaphraseNegationAndAmbiguity() async throws {
         guard #available(macOS 26.0, iOS 26.0, *) else { return }
         #expect(SystemLanguageModel.default.isAvailable, "Apple Intelligence must be available for this opt-in test")
@@ -29,7 +49,7 @@ struct AssistantLiveInterpretationTests {
             let reply = try await AssistantStructuredActionInterpreter.response(utterance: phrase, catalog: actions)
             let performed = reply.permitsActionExecution && !AssistantActionExecutionPolicy.requiresClarification(for: phrase)
                 ? actions.invocation(fromModelReply: reply.text, source: .text).map { [$0.action.name] } ?? [] : []
-            #expect(performed == expected, "\(phrase)")
+            #expect(performed == expected, "\(phrase); decision: \(reply.text), executable: \(reply.permitsActionExecution)")
         }
     }
 }

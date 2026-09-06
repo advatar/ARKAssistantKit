@@ -110,14 +110,22 @@ public final class AssistantSpeechToTextEngine {
         onDownloadProgress(nil)
 
         if #available(iOS 26.0, macOS 26.0, *) {
-            try await startModern(
-                preferredLocale: preferredLocale,
-                onPartial: onPartial,
-                onFinal: onFinal,
-                onDownloadProgress: onDownloadProgress
-            )
-            mode = .modern
-            return
+            do {
+                try await startModern(
+                    preferredLocale: preferredLocale,
+                    onPartial: onPartial,
+                    onFinal: onFinal,
+                    onDownloadProgress: onDownloadProgress
+                )
+                try Task.checkCancellation()
+                mode = .modern
+                return
+            } catch {
+                await stopModern()
+                try Task.checkCancellation()
+                // Missing modern assets/hardware may fall back, but never upload audio.
+                onDownloadProgress(nil)
+            }
         }
 
         try startLegacy(preferredLocale: preferredLocale, onPartial: onPartial, onFinal: onFinal)
@@ -183,9 +191,8 @@ public final class AssistantSpeechToTextEngine {
         if #available(iOS 16.0, macOS 14.0, *) {
             request.addsPunctuation = true
         }
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = false
-        }
+        guard recognizer.supportsOnDeviceRecognition else { throw STTError.recognizerUnavailable }
+        request.requiresOnDeviceRecognition = true
 
         self.recognizer = recognizer
         self.request = request

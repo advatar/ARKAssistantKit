@@ -9,6 +9,7 @@ enum AssistantStructuredActionInterpreter {
     struct Decision {
         let text: String
         let permitsActionExecution: Bool
+        var needsConversationalReply = false
     }
 
     static func response(utterance: String, catalog: AssistantActionCatalog) async throws -> Decision {
@@ -27,6 +28,7 @@ enum AssistantStructuredActionInterpreter {
         ]), dependencies: [])
         let instructions = """
             Classify the current user message into one app action or no action. Do not call tools or execute anything.
+            Questions about what was said earlier are conversation, not requests to open a project.
             \(AssistantChatViewModel.actionInterpretationPolicy)
             Catalog:
             \(catalog.promptSummary())
@@ -46,7 +48,8 @@ enum AssistantStructuredActionInterpreter {
         let ambiguous = try decision.value(Bool.self, forProperty: "requestNeedsClarification")
         let name = try decision.value(String.self, forProperty: "action")
         guard !negated, !ambiguous, name != "none" else {
-            return Decision(text: try decision.value(String.self, forProperty: "reply"), permitsActionExecution: false)
+            return Decision(text: try decision.value(String.self, forProperty: "reply"),
+                            permitsActionExecution: false, needsConversationalReply: !negated && !ambiguous)
         }
         let rawArguments = try decision.value(GeneratedContent.self, forProperty: "arguments")
         var arguments: [String: String] = [:]

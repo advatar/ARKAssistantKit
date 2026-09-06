@@ -37,15 +37,20 @@ public struct AssistantChatScreen: View {
 /// Presents the assistant Chat View interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatView: View {
     @ObservedObject private var model: AssistantChatViewModel
+    private let compactConversation: Bool
+    private let voiceInputEnabled: Bool
+    @FocusState private var inputFocused: Bool
 
-    public init(model: AssistantChatViewModel) {
+    public init(model: AssistantChatViewModel, compactConversation: Bool = false, voiceInputEnabled: Bool = true) {
         _model = ObservedObject(wrappedValue: model)
+        self.compactConversation = compactConversation
+        self.voiceInputEnabled = voiceInputEnabled
     }
 
     public var body: some View {
         VStack(spacing: 12) {
             header
-            canvasPanel
+            if !compactConversation { canvasPanel }
             messageList
             inputRow
         }
@@ -57,8 +62,10 @@ public struct AssistantChatView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("ARK Assistant")
-                .font(.headline)
+            if !compactConversation {
+                Text("ARK Assistant")
+                    .font(.headline)
+            }
             Text(model.localModelText)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -67,13 +74,17 @@ public struct AssistantChatView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            if !voiceInputEnabled {
+                Text("Voice chat is paused during Live Session. You can still type.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if !model.liveTranscriptPreview.isEmpty {
                 Text("Heard: \(model.liveTranscriptPreview)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
             }
-            HStack {
+            if !compactConversation { HStack {
                 Text(model.statusText)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -82,7 +93,7 @@ public struct AssistantChatView: View {
                     Task { await model.refreshTools() }
                 }
                 .buttonStyle(.borderless)
-            }
+            } }
             if let error = model.lastError {
                 Text(error)
                     .font(.caption)
@@ -95,16 +106,33 @@ public struct AssistantChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if compactConversation && model.messages.isEmpty {
+                        Text("Talk or type, just like with the Mac pet. Try ‘list my projects’, ‘what needs attention’, or ask how ARK works.")
+                            .foregroundStyle(.secondary)
+                            .padding(12)
+                    }
                     ForEach(model.messages) { message in
-                        messageRow(message)
-                            .id(message.id)
+                        if compactConversation, let visual = message.visual {
+                            A2UINativeRenderer(surface: visual, onAction: handleVisualAction)
+                                .padding(12)
+                                .disabled(model.isResponding)
+                                .accessibilityIdentifier("assistant-response-card")
+                                .id(message.id)
+                        } else {
+                            messageRow(message)
+                                .id(message.id)
+                        }
+                    }
+                    if model.isResponding {
+                        ProgressView("Thinking…")
+                            .accessibilityIdentifier("assistant-thinking")
                     }
                 }
                 .padding(.vertical, 4)
             }
             .background(chatBackground)
             .cornerRadius(8)
-            .ark_onChangeCompat(model.messages.count) {
+            .ark_onChangeCompat(model.messages) {
                 guard let last = model.messages.last else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(last.id, anchor: .bottom)
@@ -180,10 +208,7 @@ public struct AssistantChatView: View {
 
     /// Button presses inside an A2UI surface map onto catalog actions by name.
     private func handleVisualAction(_ name: String) {
-        guard let action = model.actionCatalog.action(named: name) else { return }
-        Task {
-            await model.performAction(AssistantActionInvocation(action: action, source: .text))
-        }
+        model.submitAction(named: name)
     }
 
     private func messageRow(_ message: AssistantChatViewModel.Message) -> some View {
@@ -227,8 +252,11 @@ public struct AssistantChatView: View {
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             inputField
+                .focused($inputFocused)
+                .accessibilityIdentifier("assistant-input")
                 .onSubmit {
                     model.sendCurrentInput()
+                    if compactConversation { inputFocused = false }
                 }
 
             Button {
@@ -237,12 +265,15 @@ public struct AssistantChatView: View {
                 Image(systemName: model.isRecording ? "mic.fill" : "mic")
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel(model.isMicrophoneMuted ? "Microphone muted" : "Hold to talk")
+            .accessibilityIdentifier("assistant-microphone")
             #if os(macOS)
             .help("Hold to talk")
             #endif
-            .disabled(!model.canUseVoice)
+            .disabled(!model.canUseVoice || !voiceInputEnabled || model.isMicrophoneMuted)
             .onLongPressGesture(minimumDuration: 0.0, maximumDistance: 20, pressing: { pressing in
                 if pressing {
+                    guard voiceInputEnabled else { return }
                     model.startPushToTalk()
                 } else {
                     model.stopPushToTalk()
@@ -251,6 +282,7 @@ public struct AssistantChatView: View {
 
             Button("Send") {
                 model.sendCurrentInput()
+                if compactConversation { inputFocused = false }
             }
             .disabled(!model.canSend)
         }

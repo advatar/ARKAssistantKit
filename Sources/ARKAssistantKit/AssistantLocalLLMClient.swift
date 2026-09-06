@@ -117,6 +117,7 @@ final class AssistantLocalLLMClient {
     }
 
     func response(prompt: String, instructions: String, toolAware: ToolAwareRequest? = nil) async throws -> Response {
+        try Task.checkCancellation()
         switch AssistantModelChoice.current {
         case .auto:
             break
@@ -141,6 +142,7 @@ final class AssistantLocalLLMClient {
         if let response = try? await gemmaKitResponse(prompt: prompt, instructions: instructions) {
             return response
         }
+        try Task.checkCancellation()
         if let response = try? await appleFoundationModelsResponse(
             prompt: prompt,
             instructions: instructions,
@@ -148,6 +150,7 @@ final class AssistantLocalLLMClient {
         ) {
             return response
         }
+        try Task.checkCancellation()
         if let response = try? await openAICompatibleResponse(
             baseURL: Self.swiftLMBaseURL,
             modelOverride: Self.swiftLMModelOverride,
@@ -159,9 +162,11 @@ final class AssistantLocalLLMClient {
         ) {
             return response
         }
+        try Task.checkCancellation()
         if let response = try? await ollamaResponse(prompt: prompt, instructions: instructions) {
             return response
         }
+        try Task.checkCancellation()
         throw ClientError.unavailable
     }
 

@@ -75,6 +75,10 @@ public final class AssistantChatViewModel: ObservableObject {
     private let speechSpeaker = AssistantSpeechSpeaker()
     private let localLLMClient = AssistantLocalLLMClient()
     private var voiceTask: Task<Void, Never>?
+    private var voiceCleanupTask: Task<Void, Never>?
+    private(set) var responseTask: Task<Void, Never>?
+    private var responseGeneration: UInt = 0
+    private var toolGeneration: UInt = 0
     private var voicePartialText: String = ""
     private var voiceFinalText: String = ""
     private var voiceCaptureGate = AssistantVoiceCaptureGate()
@@ -83,8 +87,8 @@ public final class AssistantChatViewModel: ObservableObject {
     private let clientName: String
     private let clientVersion: String
     private let protocolVersion: String
-    private let conversationContext: String?
-    private let defaultToolContext: MCPDefaultToolContext
+    private var conversationContext: String?
+    private var defaultToolContext: MCPDefaultToolContext
 
     public init(
         endpoint: URL? = nil,
@@ -149,6 +153,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func setEndpoint(_ endpoint: URL?, headerProvider: MCPHeaderProvider? = nil) {
+        cancelInteraction(clearConversation: true)
         mcpClient = MCPClient(
             config: AssistantChatViewModel.makeConfig(
                 endpoint: endpoint,
@@ -208,15 +213,18 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func refreshTools() async {
+        let generation = toolGeneration
         statusText = "Remote tools: connecting…"
         do {
             let tools = try await mcpClient.listTools()
+            guard generation == toolGeneration else { return }
             toolCache = tools
             statusText = "Remote tools: \(tools.count) connected"
         } catch {
             // Background discovery: reflect the state in the status line without
             // raising lastError — local actions and the LLM work without MCP, and
             // user-initiated sends surface their own errors.
+            guard generation == toolGeneration else { return }
             statusText = "Remote tools: offline — app actions still work"
             Self.logConsole("Tool discovery failed [refreshTools]: \(error.localizedDescription)")
         }
@@ -238,7 +246,12 @@ public final class AssistantChatViewModel: ObservableObject {
         guard !isRecording else { return }
         voiceTask?.cancel()
         let token = voiceCaptureGate.request()
-        voiceTask = Task { await beginVoiceCapture(token: token) }
+        let cleanup = voiceCleanupTask
+        voiceTask = Task {
+            await cleanup?.value
+            guard !Task.isCancelled, voiceCaptureGate.permits(token) else { return }
+            await beginVoiceCapture(token: token)
+        }
     }
 
     public func stopPushToTalk() {
@@ -258,6 +271,48 @@ public final class AssistantChatViewModel: ObservableObject {
 
     public func clearResponseVisual() {
         responseVisual = nil
+    }
+
+    /// Hosts call this when hiding, locking, signing out or changing projects.
+    /// Unlike releasing push-to-talk, cancellation never submits the unfinished phrase.
+    public func cancelInteraction(clearConversation: Bool = false) {
+        responseGeneration &+= 1
+        responseTask?.cancel()
+        responseTask = nil
+        isResponding = false
+        voiceCaptureGate.cancel()
+        let pendingVoice = voiceTask
+        pendingVoice?.cancel()
+        voiceTask = nil
+        micAudioEngine.stop()
+        speechSpeaker.stop()
+        isRecording = false
+        isTranscribingVoice = false
+        liveTranscriptPreview = ""
+        voiceFinalText = ""
+        voicePartialText = ""
+        let priorCleanup = voiceCleanupTask
+        voiceCleanupTask = Task {
+            await priorCleanup?.value
+            await pendingVoice?.value
+            await cancelPendingVoiceCapture()
+        }
+        if clearConversation {
+            toolGeneration &+= 1
+            toolCache.removeAll()
+            messages.removeAll()
+            inputText = ""
+            canvasTokens.removeAll()
+            responseVisual = nil
+            lastActionInvocation = nil
+            lastError = nil
+        }
+    }
+
+    /// The host owns current account/project context, not the first-opened window.
+    public func updateContext(summary: String?, defaultProjectID: String?) {
+        conversationContext = summary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        defaultToolContext = MCPDefaultToolContext(projectID: defaultProjectID)
     }
 
     /// Interrupts any in-flight speech.
@@ -285,6 +340,7 @@ public final class AssistantChatViewModel: ObservableObject {
     /// Does not speak; callers decide whether to vocalise the result.
     @discardableResult
     public func performAction(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
+        guard !Task.isCancelled else { return .failure("Request cancelled.") }
         guard let actionExecutor else {
             let outcome = AssistantActionOutcome.failure("\(invocation.action.title) isn't available right now.")
             appendMessage(role: .assistant, text: outcome.message)
@@ -292,6 +348,7 @@ public final class AssistantChatViewModel: ObservableObject {
         }
         lastActionInvocation = invocation
         let outcome = await actionExecutor.perform(invocation)
+        guard !Task.isCancelled else { return .failure("Request cancelled.") }
         appendMessage(role: .assistant, text: outcome.message)
         responseVisual = AssistantVisualComposer.surface(for: outcome, action: invocation.action)
         if outcome.isFailure {
@@ -304,11 +361,13 @@ public final class AssistantChatViewModel: ObservableObject {
     /// message is appended (the model's final reply is the chat message), but
     /// the visual and invocation bookkeeping still happen.
     func performActionForModelTool(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
+        guard !Task.isCancelled else { return .failure("Request cancelled.") }
         guard let actionExecutor else {
             return .failure("\(invocation.action.title) isn't available right now.")
         }
         lastActionInvocation = invocation
         let outcome = await actionExecutor.perform(invocation)
+        guard !Task.isCancelled else { return .failure("Request cancelled.") }
         responseVisual = AssistantVisualComposer.surface(for: outcome, action: invocation.action)
         return outcome
     }
@@ -321,7 +380,7 @@ public final class AssistantChatViewModel: ObservableObject {
             return nil
         }
         let outcome = await performAction(invocation)
-        if speakResponse {
+        if speakResponse, !Task.isCancelled {
             await speechSpeaker.speak(outcome.message)
         }
         return outcome
@@ -332,12 +391,20 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     private func submitUserMessage(_ text: String, triggeredByVoice: Bool) {
+        guard !isResponding, !Task.isCancelled else { return }
         lastError = nil
         appendMessage(role: .user, text: text)
-        Task { await self.generateResponse(for: text, speakResponse: triggeredByVoice) }
+        responseGeneration &+= 1
+        let generation = responseGeneration
+        isResponding = true
+        responseTask = Task {
+            guard !Task.isCancelled, generation == responseGeneration else { return }
+            await self.generateResponse(for: text, speakResponse: triggeredByVoice, generation: generation)
+        }
     }
 
     private func beginVoiceCapture(token: UInt) async {
+        let generation = responseGeneration
         lastError = nil
         voiceStatusText = nil
         liveTranscriptPreview = ""
@@ -372,7 +439,7 @@ public final class AssistantChatViewModel: ObservableObject {
             try await speechToTextEngine.start(
                 preferredLocale: .current,
                 onPartial: { [weak self] text in
-                    guard let self else { return }
+                    guard let self, generation == self.responseGeneration else { return }
                     self.voicePartialText = text
                     self.liveTranscriptPreview = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if self.isRecording {
@@ -380,7 +447,7 @@ public final class AssistantChatViewModel: ObservableObject {
                     }
                 },
                 onFinal: { [weak self] text in
-                    guard let self else { return }
+                    guard let self, generation == self.responseGeneration else { return }
                     self.voiceFinalText = text
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
@@ -388,7 +455,7 @@ public final class AssistantChatViewModel: ObservableObject {
                     }
                 },
                 onDownloadProgress: { [weak self] progress in
-                    guard let self else { return }
+                    guard let self, generation == self.responseGeneration else { return }
                     if progress != nil {
                         self.voiceStatusText = "Downloading speech assets…"
                     } else if self.isRecording {
@@ -437,6 +504,7 @@ public final class AssistantChatViewModel: ObservableObject {
         micAudioEngine.stop()
         await speechToTextEngine.stop()
 
+        guard !Task.isCancelled else { return }
         let trimmed = Self.resolvedVoiceTranscript(final: voiceFinalText, partial: voicePartialText)
         liveTranscriptPreview = ""
         voiceFinalText = ""
@@ -487,10 +555,10 @@ public final class AssistantChatViewModel: ObservableObject {
         }
     }
 
-    private func generateResponse(for userText: String, speakResponse: Bool) async {
+    private func generateResponse(for userText: String, speakResponse: Bool, generation: UInt) async {
         updateLocalModelStatus()
         isResponding = true
-        defer { isResponding = false }
+        defer { if generation == responseGeneration { isResponding = false } }
 
         if await performResolvedAction(for: userText, speakResponse: speakResponse) != nil {
             return
@@ -498,10 +566,11 @@ public final class AssistantChatViewModel: ObservableObject {
 
         do {
             let forceToolRefresh = shouldHandleToolInventoryRequest(userText)
-            let tools = forceToolRefresh
-                ? try await mcpClient.listTools()
-                : (toolCache.isEmpty ? try await mcpClient.listTools() : toolCache)
-            if toolCache.isEmpty || forceToolRefresh {
+            let fetchRemote = Self.requiresRemoteDiscovery(hasLocalActions: actionExecutor != nil,
+                hasCachedTools: !toolCache.isEmpty, requestedInventory: forceToolRefresh)
+            let tools = fetchRemote ? try await mcpClient.listTools() : toolCache
+            try Task.checkCancellation()
+            if fetchRemote {
                 toolCache = tools
                 statusText = "Remote tools: \(tools.count) connected"
             }
@@ -529,6 +598,7 @@ public final class AssistantChatViewModel: ObservableObject {
             if actionExecutor == nil,
                let request = projectToolRequest(for: userText, tools: tools) {
                 let result = try await mcpClient.callTool(name: request.name, arguments: request.arguments)
+                try Task.checkCancellation()
                 captureA2UITokens(from: result)
                 let response = MCPToolFormatting.formatToolResult(isError: result.isError, text: result.text)
                 appendMessage(role: .assistant, text: response)
@@ -547,6 +617,7 @@ public final class AssistantChatViewModel: ObservableObject {
             let assistantId = UUID()
             messages.append(Message(id: assistantId, role: .assistant, text: "", timestamp: Date()))
             let response = try await generateLocalLLMResponse(userText: userText, tools: tools)
+            try Task.checkCancellation()
             localModelText = "Model: \(response.providerLabel)"
 
             if actionExecutor != nil,
@@ -558,6 +629,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 // Replace the raw JSON placeholder with the action outcome.
                 messages.removeAll { $0.id == assistantId }
                 let outcome = await performAction(invocation)
+                try Task.checkCancellation()
                 if speakResponse {
                     await speechSpeaker.speak(outcome.message)
                 }
@@ -570,6 +642,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 await speechSpeaker.speak(reply)
             }
         } catch {
+            guard !Task.isCancelled, generation == responseGeneration else { return }
             reportError(error.localizedDescription, context: "generateResponse")
             appendMessage(role: .assistant, text: "Error: \(error.localizedDescription)")
         }
@@ -580,6 +653,11 @@ public final class AssistantChatViewModel: ObservableObject {
         if role == .assistant, text.hasPrefix("Error:") {
             Self.logConsole("Assistant message: \(text)")
         }
+    }
+
+    /// Local conversation/action interpretation must not depend on remote MCP availability.
+    static func requiresRemoteDiscovery(hasLocalActions: Bool, hasCachedTools: Bool, requestedInventory: Bool) -> Bool {
+        requestedInventory || (!hasLocalActions && !hasCachedTools)
     }
 
     private func reportError(_ message: String, context: String) {

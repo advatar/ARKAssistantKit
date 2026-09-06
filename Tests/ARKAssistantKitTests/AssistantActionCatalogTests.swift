@@ -36,8 +36,8 @@ struct AssistantActionCatalogTests {
         ),
     ])
 
-    @Test func longestPhraseWins() {
-        let invocation = Self.catalog.resolve(utterance: "please end session now", source: .text)
+    @Test func completePhraseDoesNotMatchShorterEmbeddedAction() {
+        let invocation = Self.catalog.resolve(utterance: "please end session", source: .text)
         #expect(invocation?.action.name == "session.end")
     }
 
@@ -65,20 +65,48 @@ struct AssistantActionCatalogTests {
 
     @Test func parsesFencedModelReply() {
         let reply = """
-        Sure, doing that now:
         ```json
-        {"action": "session.start", "arguments": {"title": "Demo", "count": 2}}
+        {"action": "evidence.note", "arguments": {"note": "Guitar Take TWO"}}
         ```
         """
         let invocation = Self.catalog.invocation(fromModelReply: reply, source: .text)
-        #expect(invocation?.action.name == "session.start")
-        #expect(invocation?.arguments["title"] == "Demo")
-        #expect(invocation?.arguments["count"] == "2")
+        #expect(invocation?.action.name == "evidence.note")
+        #expect(invocation?.arguments["note"] == "Guitar Take TWO")
     }
 
-    @Test func parsesReplyByTitle() {
+    @Test func requiresExactMachineActionName() {
         let invocation = Self.catalog.invocation(fromModelReply: #"{"action":"End Studio Session"}"#, source: .voice)
-        #expect(invocation?.action.name == "session.end")
+        #expect(invocation == nil)
+    }
+
+    @Test func negationQuotationsCompoundsAndParaphrasesAreNotSubstringCommands() {
+        for text in ["don't start session", "do not start session", "never start session",
+                     "please don't start session", "I said start session but changed my mind",
+                     "what does start session do", "start session or end session",
+                     "start session and end session", "\"start session\"", "“start session”",
+                     "don't log note a guitar take", "could we begin making a fresh recording together",
+                     "Before I go back to working on the bass line I would appreciate it if you could help me by showing the state of the current project"] {
+            #expect(Self.catalog.resolve(utterance: text, source: .voice) == nil, "\(text)")
+        }
+    }
+
+    @Test func duplicatePhraseAcrossActionsRequiresInterpretation() {
+        let same = AssistantAction(name: "other", title: "Other", description: "Other", category: .assistant,
+                                   phrases: ["start session"])
+        let catalog = AssistantActionCatalog(actions: Self.catalog.actions + [same])
+        #expect(catalog.resolve(utterance: "start session", source: .text) == nil)
+    }
+
+    @Test func malformedOrUntrustedModelDecisionsCannotExecute() {
+        for reply in [#"{"action":"session.start","arguments":{"confirm":"yes"}}"#,
+                      #"{"action":"evidence.note","arguments":{}}"#,
+                      #"{"action":"evidence.note","arguments":{"note":true}}"#,
+                      #"{"action":"session.start","arguments":null}"#,
+                      #"{"action":"session.start","confirmed":true}"#,
+                      #"{"action":"session.start"} {"action":"session.end"}"#,
+                      #"Do not run {"action":"session.start"}"#] {
+            #expect(Self.catalog.invocation(fromModelReply: reply, source: .text) == nil, "\(reply)")
+        }
     }
 
     @Test func unknownActionOrProseReturnsNil() {
@@ -93,30 +121,6 @@ struct AssistantActionCatalogTests {
         #expect(summary.contains("- evidence.note: Logs a note to the session. (args: note)"))
     }
 }
-
-#if canImport(FoundationModels)
-import FoundationModels
-
-struct AssistantActionFoundationToolTests {
-    @Test @MainActor func toolExposesActionNameParametersAndConfirmGuard() {
-        guard #available(iOS 26.0, macOS 26.0, *) else { return }
-        let action = AssistantAction(
-            name: "protection.stop",
-            title: "Stop Protecting",
-            description: "Stops protecting a folder.",
-            category: .protection,
-            phrases: ["stop protecting {project}"],
-            parameters: [AssistantActionParameter(name: "project", title: "Project name", isRequired: true)],
-            requiresConfirmation: true
-        )
-        let tool = AssistantActionFoundationTool(action: action, source: .voice) { _ in
-            AssistantActionOutcome(message: "ok")
-        }
-        #expect(tool.name == "protection.stop")
-        #expect(tool.description.contains("Destructive"))
-    }
-}
-#endif
 
 struct AssistantModelChoiceTests {
     @Test func choicesRoundTripAndHaveTitles() {

@@ -11,8 +11,8 @@ import FoundationModels
 /// Developer-facing override for which local model answers the assistant.
 /// `.auto` keeps the ladder (Gemma → Apple FM → SwiftLM → Ollama); a specific
 /// choice pins that provider so intelligence can be compared side by side.
-/// Interpretation mechanism follows the provider: Apple FM binds the action
-/// catalog as native FoundationModels tools, the others use the JSON protocol.
+/// Apple FM generates one schema-guided action decision; other providers use
+/// the strict JSON protocol. Neither path receives execution authority.
 public enum AssistantModelChoice: String, CaseIterable, Sendable {
     case auto
     case gemma
@@ -46,6 +46,7 @@ final class AssistantLocalLLMClient {
     struct Response: Sendable {
         let text: String
         let providerLabel: String
+        var permitsActionExecution: Bool = true
     }
 
     enum ClientError: LocalizedError {
@@ -103,20 +104,12 @@ final class AssistantLocalLLMClient {
         return Self.swiftLMEnabled || Self.ollamaEnabled || Self.appleFoundationModelsAvailable
     }
 
-    /// Native tool binding for providers that support it (Apple Foundation
-    /// Models). `makeTools` returns `[any FoundationModels.Tool]` erased to
-    /// `[Any]` so the request type needs no FoundationModels availability.
-    struct ToolAwareRequest {
-        let instructions: String
-        let makeTools: @MainActor () -> [Any]
-
-        init(instructions: String, makeTools: @escaping @MainActor () -> [Any]) {
-            self.instructions = instructions
-            self.makeTools = makeTools
-        }
+    struct ActionInterpretationRequest {
+        let utterance: String
+        let catalog: AssistantActionCatalog
     }
 
-    func response(prompt: String, instructions: String, toolAware: ToolAwareRequest? = nil) async throws -> Response {
+    func response(prompt: String, instructions: String, actionRequest: ActionInterpretationRequest? = nil) async throws -> Response {
         try Task.checkCancellation()
         switch AssistantModelChoice.current {
         case .auto:
@@ -124,7 +117,7 @@ final class AssistantLocalLLMClient {
         case .gemma:
             return try await gemmaKitResponse(prompt: prompt, instructions: instructions)
         case .apple:
-            return try await appleFoundationModelsResponse(prompt: prompt, instructions: instructions, toolAware: toolAware)
+            return try await appleFoundationModelsResponse(prompt: prompt, instructions: instructions, actionRequest: actionRequest)
         case .swiftlm:
             return try await openAICompatibleResponse(
                 baseURL: Self.swiftLMBaseURL,
@@ -146,7 +139,7 @@ final class AssistantLocalLLMClient {
         if let response = try? await appleFoundationModelsResponse(
             prompt: prompt,
             instructions: instructions,
-            toolAware: toolAware
+            actionRequest: actionRequest
         ) {
             return response
         }
@@ -272,32 +265,27 @@ final class AssistantLocalLLMClient {
     private func appleFoundationModelsResponse(
         prompt: String,
         instructions: String,
-        toolAware: ToolAwareRequest? = nil
+        actionRequest: ActionInterpretationRequest? = nil
     ) async throws -> Response {
 #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             guard Self.appleFoundationModelsAvailable else { throw ClientError.unavailable }
-            let session: LanguageModelSession
-            var providerLabel = "Apple Foundation Models"
-            if let toolAware,
-               let tools = toolAware.makeTools() as? [any FoundationModels.Tool],
-               !tools.isEmpty {
-                // Native tool-calling: the model invokes catalog actions
-                // directly instead of the JSON-reply protocol.
-                session = LanguageModelSession(tools: tools, instructions: Instructions(toolAware.instructions))
-                providerLabel = "Apple Foundation Models (native tools)"
-            } else {
-                session = LanguageModelSession(instructions: Instructions(instructions))
+            if let actionRequest {
+                let decision = try await AssistantStructuredActionInterpreter.response(
+                    utterance: actionRequest.utterance, catalog: actionRequest.catalog)
+                return Response(text: decision.text, providerLabel: "Apple Foundation Models (guided decision)",
+                                permitsActionExecution: decision.permitsActionExecution)
             }
+            let session = LanguageModelSession(instructions: Instructions(instructions))
             let response = try await session.respond(to: Prompt(prompt), options: GenerationOptions(temperature: 0.2))
             let text = String(describing: response.content).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw ClientError.emptyResponse }
-            return Response(text: text, providerLabel: providerLabel)
+            return Response(text: text, providerLabel: "Apple Foundation Models")
         }
 #endif
         let _ = prompt
         let _ = instructions
-        let _ = toolAware
+        let _ = actionRequest
         throw ClientError.unavailable
     }
 

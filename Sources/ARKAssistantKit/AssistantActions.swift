@@ -41,7 +41,8 @@ public struct AssistantAction: Sendable, Equatable, Identifiable, Codable {
     public let description: String
     public let category: Category
     /// Trigger phrases. Matching is case-insensitive; `{note}`-style placeholders capture free text
-    /// into the named parameter. Phrases without placeholders match when the utterance contains them.
+    /// into the named parameter. Only complete commands take the deterministic fast path;
+    /// other wording is left to the model, not rejected.
     public let phrases: [String]
     public let parameters: [AssistantActionParameter]
     /// When `true`, the executor should require an explicit confirmation before a destructive step.
@@ -131,22 +132,23 @@ public struct AssistantActionCatalog: Sendable, Equatable {
     }
 
     /// Resolves a natural-language utterance to an action using the catalog's phrases.
-    /// Longer phrase matches win so "end session" beats "session". Returns `nil` when no phrase matches.
+    /// Accepts a complete command, optionally prefixed with "please". Never executes
+    /// a phrase embedded in negation, a question, quotation, or a compound request.
     public func resolve(utterance: String, source: AssistantActionInvocation.Source) -> AssistantActionInvocation? {
-        let normalized = Self.normalize(utterance)
+        guard !utterance.contains(where: { "\"“”‘’`".contains($0) }) else { return nil }
+        var normalized = Self.normalize(utterance)
+        if normalized.hasPrefix("please ") { normalized.removeFirst("please ".count) }
         guard !normalized.isEmpty else { return nil }
 
-        var best: (action: AssistantAction, arguments: [String: String], score: Int)?
+        var matches: [AssistantActionInvocation] = []
         for action in actions {
             for phrase in action.phrases {
                 guard let match = Self.match(phrase: phrase, in: normalized) else { continue }
-                if best == nil || match.score > best!.score {
-                    best = (action, match.arguments, match.score)
-                }
+                let invocation = AssistantActionInvocation(action: action, arguments: match.arguments, source: source)
+                if !matches.contains(invocation) { matches.append(invocation) }
             }
         }
-        guard let best else { return nil }
-        return AssistantActionInvocation(action: best.action, arguments: best.arguments, source: source)
+        return matches.count == 1 ? matches[0] : nil
     }
 
     /// Compact textual description of the catalog for LLM prompts.
@@ -160,23 +162,32 @@ public struct AssistantActionCatalog: Sendable, Equatable {
     }
 
     /// Parses an LLM reply of the form `{"action":"name","arguments":{...}}` (optionally wrapped in
-    /// prose or a code fence) into an invocation. Unknown action names resolve to `nil`.
+    /// a code fence) into an invocation. Prose, unknown keys/actions, missing required
+    /// arguments and multiple decisions are not executable replies.
     public func invocation(fromModelReply reply: String, source: AssistantActionInvocation.Source) -> AssistantActionInvocation? {
-        guard let start = reply.firstIndex(of: "{"), let end = reply.lastIndex(of: "}"), start < end else { return nil }
-        let json = String(reply[start...end])
+        var json = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        if json.hasPrefix("```json\n"), json.hasSuffix("\n```") {
+            json = String(json.dropFirst(8).dropLast(4))
+        }
         guard let data = json.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys).isSubset(of: ["action", "arguments"]),
               let name = object["action"] as? String,
-              let action = action(named: name) else {
+              let action = actions.first(where: { $0.name == name }) else {
             return nil
         }
         var arguments: [String: String] = [:]
-        if let raw = object["arguments"] as? [String: Any] {
+        if let rawValue = object["arguments"] {
+            guard let raw = rawValue as? [String: Any],
+                  Set(raw.keys).isSubset(of: Set(action.parameters.map(\.name))) else { return nil }
             for (key, value) in raw {
-                if let string = value as? String { arguments[key] = string }
-                else if let number = value as? NSNumber { arguments[key] = number.stringValue }
+                guard let string = value as? String else { return nil }
+                arguments[key] = string
             }
         }
+        guard action.parameters.filter(\.isRequired).allSatisfy({
+            !(arguments[$0.name]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }) else { return nil }
         return AssistantActionInvocation(action: action, arguments: arguments, source: source)
     }
 
@@ -211,14 +222,14 @@ public struct AssistantActionCatalog: Sendable, Equatable {
             let parameter = String(normalizedPhrase[normalizedPhrase.index(after: open)..<close])
             let literal = normalizedPhrase[..<open].trimmingCharacters(in: .whitespaces)
             guard !literal.isEmpty,
-                  let range = normalizedUtterance.range(of: literal) else { return nil }
+                  close == normalizedPhrase.index(before: normalizedPhrase.endIndex),
+                  let range = normalizedUtterance.range(of: literal + " ", options: .anchored) else { return nil }
             let remainder = normalizedUtterance[range.upperBound...].trimmingCharacters(in: .whitespaces)
             guard !remainder.isEmpty else { return nil }
             return PhraseMatch(score: literal.count + 1, arguments: [parameter: remainder])
         }
 
-        let padded = " \(normalizedUtterance) "
-        guard padded.contains(" \(normalizedPhrase) ") else { return nil }
+        guard normalizedUtterance == normalizedPhrase else { return nil }
         return PhraseMatch(score: normalizedPhrase.count, arguments: [:])
     }
 }

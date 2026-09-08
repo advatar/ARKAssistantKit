@@ -450,7 +450,7 @@ struct AssistantPetCharacter: View {
         // reads as the pet moving instead of the view redrawing.
         .animation(allowsMotion ? .spring(response: 0.42, dampingFraction: 0.62) : nil, value: descriptor.faderPose)
         .scaleEffect(scale)
-        .offset(y: isHovering ? -2 : 0)
+        // Hover changes the glow, never the character's position or hit target.
         .shadow(color: descriptor.color.opacity(isHovering ? 0.28 : 0), radius: 12)
         // A slow, shallow breath: enough to look awake, not enough to catch the
         // eye of someone trying to work.

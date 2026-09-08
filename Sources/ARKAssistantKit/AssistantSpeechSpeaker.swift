@@ -7,7 +7,7 @@ import AVFoundation
 /// Implements the assistant Speech Speaker type for ARKAssistantKit in the shared Swift packages.
 @MainActor
 final class AssistantSpeechSpeaker: NSObject {
-    private let synthesizer = AVSpeechSynthesizer()
+    private(set) var synthesizer: AVSpeechSynthesizer?
     private var finishContinuation: CheckedContinuation<Void, Never>?
     private var activeUtteranceID: ObjectIdentifier?
 
@@ -23,7 +23,6 @@ final class AssistantSpeechSpeaker: NSObject {
 
     override init() {
         super.init()
-        synthesizer.delegate = self
     }
 
     func speak(_ text: String, language: String? = nil) async {
@@ -31,6 +30,14 @@ final class AssistantSpeechSpeaker: NSObject {
         guard !trimmed.isEmpty else { return }
 
         stop()
+        let synthesizer: AVSpeechSynthesizer
+        if let existing = self.synthesizer {
+            synthesizer = existing
+        } else {
+            synthesizer = AVSpeechSynthesizer()
+            synthesizer.delegate = self
+            self.synthesizer = synthesizer
+        }
         configureAudioSessionForSpeech()
 
         let requestedLanguage = language?.replacingOccurrences(of: "_", with: "-")
@@ -55,12 +62,16 @@ final class AssistantSpeechSpeaker: NSObject {
             finishContinuation = continuation
             synthesizer.speak(utterance)
         }
-        isSpeaking = false
+        // Completion owns the state transition. An older resumed speak() must
+        // not clear the state of a replacement utterance.
     }
 
     func stop() {
-        if synthesizer.isSpeaking || synthesizer.isPaused {
-            synthesizer.stopSpeaking(at: .immediate)
+        // Querying AVFoundation's status can synchronously wait on its speech
+        // service. Our own utterance identity is sufficient, including speech
+        // that has been queued but has not started yet.
+        if activeUtteranceID != nil {
+            synthesizer?.stopSpeaking(at: .immediate)
         }
         finishCurrentUtterance()
     }

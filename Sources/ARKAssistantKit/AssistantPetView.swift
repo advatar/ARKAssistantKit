@@ -6,6 +6,13 @@
 
 import SwiftUI
 
+struct AssistantPetMotionPolicy: Equatable {
+    let allowsMotion: Bool
+    init(reduceMotion: Bool, liveSession: Bool, quietAppearance: Bool) {
+        allowsMotion = !reduceMotion && !liveSession && !quietAppearance
+    }
+}
+
 // MARK: - State descriptor
 
 /// Pure mapping from (phase, muted, error) to what the pet shows.
@@ -29,10 +36,35 @@ public struct ARKPetStateDescriptor: Equatable, Sendable {
     /// Accessibility/help text for the primary (push-to-talk) control.
     public let primaryActionHint: String
 
+    /// Resting offsets for the three fader caps, in points.
+    ///
+    /// These are *postures*, not measurements: each state has a distinct, fixed
+    /// stance the caps settle into, so a state change is legible as movement
+    /// without inventing an audio level the app does not have. Deterministic on
+    /// purpose — nothing here is driven by signal, and nothing jitters.
+    public var faderPose: [CGFloat] {
+        if accent == .orange { return [0, 0, 0] }
+        if isMuted && (phase == .ready || phase == .listening) { return [8, 8, 8] }
+        switch phase {
+        case .ready: return [-7, 0, 7]
+        case .listening: return [-3, -9, -3]
+        case .thinking: return [5, -5, 5]
+        case .speaking: return [-9, 3, -9]
+        case .unavailable: return [0, 0, 0]
+        }
+    }
+
     public init(phase: AssistantVoicePhase, isMuted: Bool, error: String?) {
         self.phase = phase
         self.isMuted = isMuted
         switch (phase, isMuted) {
+        case (.listening, true):
+            symbol = "mic.slash"
+            accent = .gray
+            status = "Muted"
+            showsCancel = false
+            pulses = false
+            primaryActionHint = "Unmute to talk."
         case (.listening, _):
             symbol = "mic.fill"
             accent = .red
@@ -62,9 +94,10 @@ public struct ARKPetStateDescriptor: Equatable, Sendable {
             pulses = false
             primaryActionHint = "Voice is unavailable."
         case (.ready, true):
-            symbol = "mic.slash"
-            accent = .gray
-            status = "Muted"
+            let hasError = error?.isEmpty == false
+            symbol = hasError ? "exclamationmark.triangle.fill" : "mic.slash"
+            accent = hasError ? .orange : .gray
+            status = hasError ? Self.shortError(error ?? "") : "Muted"
             showsCancel = false
             pulses = false
             primaryActionHint = "Unmute to talk."
@@ -128,8 +161,13 @@ public struct AssistantPetView: View {
     private let onDismiss: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("ark.assistant.quietAppearance") private var quietAppearance = false
     @State private var isPressing = false
     @State private var pulseOn = false
+    @State private var breathing = false
+    @State private var isHovering = false
+    /// Incremented on each touch so the ripple and haptic have something to fire on.
+    @State private var touchCount = 0
 
     public init(model: AssistantChatViewModel, onOpenChat: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
         _model = ObservedObject(wrappedValue: model)
@@ -177,8 +215,12 @@ public struct AssistantPetView: View {
                 .fill(panelBackground)
                 .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
         )
-        .onAppear { pulseOn = true }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.responseVisual)
+        .onAppear {
+            pulseOn = true
+            breathing = true
+        }
+        .animation(allowsMotion ? .easeInOut(duration: 0.2) : nil, value: model.responseVisual)
+        .transaction { if !allowsMotion { $0.animation = nil; $0.disablesAnimations = true } }
     }
 
     // MARK: Sections
@@ -231,19 +273,41 @@ public struct AssistantPetView: View {
         .font(.system(size: 14, weight: .semibold))
     }
 
+    /// Motion is suppressed for Reduce Motion and during a live session: a pet
+    /// fidgeting in the corner while the room is being recorded is a distraction,
+    /// not charm.
+    private var allowsMotion: Bool {
+        AssistantPetMotionPolicy(reduceMotion: reduceMotion, liveSession: model.isStudioQuiet,
+                                 quietAppearance: quietAppearance).allowsMotion
+    }
+
     private func character(_ descriptor: ARKPetStateDescriptor) -> some View {
-        let shouldPulse = descriptor.phase == .listening && !reduceMotion && !model.isStudioQuiet
+        let shouldPulse = descriptor.phase == .listening && !descriptor.isMuted && allowsMotion
         return AssistantPetCharacter(
             descriptor: descriptor,
-            isPressed: isPressing && !model.isStudioQuiet,
-            pulse: shouldPulse ? pulseOn : false
+            isPressed: isPressing && allowsMotion,
+            pulse: shouldPulse ? pulseOn : false,
+            breathing: breathing && allowsMotion,
+            isHovering: isHovering && allowsMotion,
+            touchCount: touchCount,
+            allowsMotion: allowsMotion
         )
+        .onHover { hovering in
+            withAnimation(allowsMotion ? .easeOut(duration: 0.18) : nil) { isHovering = hovering }
+        }
+        .petTouchFeedback(trigger: touchCount)
+        .onChange(of: isPressing) { pressing in
+            if pressing && allowsMotion { touchCount &+= 1 }
+        }
         .animation(
-            shouldPulse ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+            shouldPulse ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : nil,
             value: pulseOn
         )
-        .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.7), value: isPressing)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: descriptor)
+        .animation(allowsMotion ? .spring(response: 0.25, dampingFraction: 0.7) : nil, value: isPressing)
+        .animation(allowsMotion ? .easeInOut(duration: 0.25) : nil, value: descriptor)
+        // Destroy the animated subtree on gate transitions: an already-running
+        // repeatForever must not survive by retaining its previous transaction.
+        .id(allowsMotion)
     }
 
     private func statusRow(_ descriptor: ARKPetStateDescriptor) -> some View {
@@ -344,9 +408,14 @@ public struct AssistantPetView: View {
 // MARK: - Compact console companion
 
 struct AssistantPetCharacter: View {
+    @State private var breathPhase = false
     let descriptor: ARKPetStateDescriptor
     let isPressed: Bool
     let pulse: Bool
+    var breathing: Bool = false
+    var isHovering: Bool = false
+    var touchCount: Int = 0
+    var allowsMotion: Bool = true
 
     var body: some View {
         VStack(spacing: 14) {
@@ -364,7 +433,7 @@ struct AssistantPetCharacter: View {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(Color.primary.opacity(0.8))
                                 .frame(width: 13, height: 7)
-                                .offset(y: CGFloat(index - 1) * 7)
+                                .offset(y: descriptor.faderPose[index])
                         }
                 }
             }
@@ -376,6 +445,58 @@ struct AssistantPetCharacter: View {
         .frame(width: 130, height: 122)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.12)))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.secondary.opacity(0.3)))
-        .scaleEffect(isPressed ? 0.98 : 1)
+        .overlay(touchRipple)
+        // Caps settle into the new stance rather than snapping, so a state change
+        // reads as the pet moving instead of the view redrawing.
+        .animation(allowsMotion ? .spring(response: 0.42, dampingFraction: 0.62) : nil, value: descriptor.faderPose)
+        .scaleEffect(scale)
+        .offset(y: isHovering ? -2 : 0)
+        .shadow(color: descriptor.color.opacity(isHovering ? 0.28 : 0), radius: 12)
+        // A slow, shallow breath: enough to look awake, not enough to catch the
+        // eye of someone trying to work.
+        .animation(
+            !allowsMotion ? nil : breathing && !isPressed
+                ? .easeInOut(duration: 3.4).repeatForever(autoreverses: true)
+                : .spring(response: 0.28, dampingFraction: 0.6),
+            value: breathPhase
+        )
+        .onAppear { breathPhase = true }
+    }
+
+    private var scale: CGFloat {
+        guard allowsMotion else { return 1 }
+        if isPressed { return 0.955 }
+        if breathing && breathPhase { return 1.012 }
+        return 1
+    }
+
+    /// A single ring that expands and fades from the point of contact.
+    @ViewBuilder
+    private var touchRipple: some View {
+        if allowsMotion {
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(descriptor.color.opacity(0.55), lineWidth: 2)
+                .scaleEffect(isPressed ? 1.06 : 0.94)
+                .opacity(isPressed ? 0.9 : 0)
+                .animation(.easeOut(duration: 0.45), value: isPressed)
+                .animation(.easeOut(duration: 0.45), value: touchCount)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+private extension View {
+    /// A light tap on touch, where the platform supports it.
+    @ViewBuilder
+    func petTouchFeedback(trigger: Int) -> some View {
+        #if os(iOS)
+        if #available(iOS 17.0, *) {
+            self.sensoryFeedback(.impact(weight: .light, intensity: 0.5), trigger: trigger)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }

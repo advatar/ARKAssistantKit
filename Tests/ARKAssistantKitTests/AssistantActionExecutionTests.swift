@@ -124,8 +124,8 @@ struct ARKPetStateDescriptorTests {
         #expect(errored.status.count <= 40)
         #expect(errored.status.hasSuffix("…"))
 
-        // Listening while muted cannot happen, but the live phase still wins over the mute badge.
+        // A stale listening phase must not imply active microphone capture after mute.
         let listeningMuted = ARKPetStateDescriptor(phase: .listening, isMuted: true, error: nil)
-        #expect(listeningMuted.accent == .red)
+        #expect(listeningMuted.accent == .gray)
     }
 }

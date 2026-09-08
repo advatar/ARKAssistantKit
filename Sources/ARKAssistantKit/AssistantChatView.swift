@@ -87,6 +87,7 @@ public struct AssistantChatScreen: View {
 
 /// Presents the assistant Chat View interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatView: View {
+    @AppStorage("ark.assistant.quietAppearance") private var quietAppearance = false
     @ObservedObject private var model: AssistantChatViewModel
     private let compactConversation: Bool
     private let voiceInputEnabled: Bool
@@ -131,6 +132,9 @@ public struct AssistantChatView: View {
                 .onChange(of: model.spokenRepliesEnabled) { enabled in
                     if !enabled { model.stopSpeaking() }
                 }
+            Toggle("Quiet appearance", isOn: $quietAppearance)
+                .font(.caption)
+                .help("Keep the companion still, including outside Live Session.")
             if !voiceInputEnabled || model.isStudioQuiet {
                 Text("Voice chat is paused during Live Session. You can still type.")
                     .font(.caption).foregroundStyle(.secondary)

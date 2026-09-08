@@ -58,7 +58,7 @@ struct A2UIAndComposerTests {
     @Test func composerBuildsBulletCard() throws {
         let outcome = AssistantActionOutcome(message: "Next steps\n- Plug in the mic\n- Press record\n- Sing")
         let action = AssistantAction(name: "x", title: "Studio", description: "", category: .session, phrases: [])
-        let surface = AssistantVisualComposer.surface(for: outcome, action: action)
+        let surface = try #require(AssistantVisualComposer.surface(for: outcome, action: action))
         #expect(surface.surfaceID == AssistantVisualComposer.surfaceID)
         #expect(surface.rootComponent?.type == .card)
         #expect(surface.component(id: "title")?.text == .literal("Studio"))
@@ -93,14 +93,42 @@ struct A2UIAndComposerTests {
         let outcome = AssistantActionOutcome(message: "m", a2uiSurfaceJSON: provided.encodeJSON())
         #expect(AssistantVisualComposer.surface(for: outcome, action: nil) == provided)
 
-        let failed = AssistantVisualComposer.surface(for: .failure("Nope"), action: nil)
+        let failed = try #require(AssistantVisualComposer.surface(for: .failure("Project: Demo\nProblem: Not available"), action: nil))
         #expect(failed.component(id: "icon")?.name == .literal("exclamationmark.triangle.fill"))
         #expect(failed.component(id: "title")?.text == .literal("Couldn't do that"))
     }
 
     @Test func shortReplyHasNoVisual() {
         #expect(AssistantVisualComposer.surface(forReply: "Hi there!") == nil)
-        #expect(AssistantVisualComposer.surface(forReply: "Step one\nStep two") != nil)
+        #expect(AssistantVisualComposer.surface(forReply: "Step one\nStep two") == nil)
+        #expect(AssistantVisualComposer.surface(forReply: "1. Step one\n2. Step two") != nil)
+    }
+
+    @Test func plainConfirmationsAndLongProseHaveNoVisual() {
+        let confirmation = "Opened Music's Live Session panel; recording has not started."
+        let longReply = String(repeating: "You can review the session in the open panel. ", count: 8)
+        for text in ["", confirmation, longReply, "Opened the panel.\nRecording has not started.", "Error: No active project."] {
+            #expect(AssistantVisualComposer.surface(forReply: text) == nil)
+            #expect(AssistantVisualComposer.surface(for: .init(message: text), action: nil) == nil)
+        }
+        #expect(AssistantVisualComposer.surface(for: .failure(confirmation), action: nil) == nil)
+        #expect(AssistantVisualComposer.surface(for: .init(message: confirmation, a2uiSurfaceJSON: "invalid"), action: nil) == nil)
+    }
+
+    @Test func structuredRepliesStillHaveVisuals() {
+        for text in ["- Demo Song\n- Second Song", "1. Join the session\n2. Review contributions", "Project: Music\nState: Ready"] {
+            #expect(AssistantVisualComposer.surface(forReply: text) != nil)
+        }
+    }
+
+    @Test func explicitInteractiveCardSurvivesPlainConfirmation() {
+        let provided = A2UISurface(surfaceID: "session", root: "root", components: [
+            .init(id: "root", component: .card, children: ["status", "open"]),
+            .init(id: "status", component: .text, text: .path("/status")),
+            .init(id: "open", component: .button, label: .literal("Open session"), action: .init(name: "navigation.liveSession"))
+        ], dataModel: .object(["status": .string("Ready")]))
+        let outcome = AssistantActionOutcome(message: "Opened the panel.", a2uiSurfaceJSON: provided.encodeJSON())
+        #expect(AssistantVisualComposer.surface(for: outcome, action: nil) == provided)
     }
 
     @Test func canvasPayloadDecodesEnvelopeAndStream() throws {

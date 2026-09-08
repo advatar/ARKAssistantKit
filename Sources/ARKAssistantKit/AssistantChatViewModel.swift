@@ -387,6 +387,7 @@ public final class AssistantChatViewModel: ObservableObject {
     public func performAction(_ invocation: AssistantActionInvocation) async -> AssistantActionOutcome {
         guard !Task.isCancelled else { return .failure("Request cancelled.") }
         let generation = responseGeneration
+        responseVisual = nil
         guard let actionExecutor else {
             let outcome = AssistantActionOutcome.failure("\(invocation.action.title) isn't available right now.")
             appendMessage(role: .assistant, text: outcome.message)
@@ -589,6 +590,7 @@ public final class AssistantChatViewModel: ObservableObject {
 
     private func generateResponse(for userText: String, speakResponse: Bool, generation: UInt) async {
         updateLocalModelStatus()
+        responseVisual = nil
         isResponding = true
         defer { if generation == responseGeneration { isResponding = false } }
 

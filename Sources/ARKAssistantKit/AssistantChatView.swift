@@ -102,7 +102,9 @@ public struct AssistantChatView: View {
     public var body: some View {
         VStack(spacing: 12) {
             header
-            if !compactConversation { canvasPanel }
+            if !compactConversation, model.responseVisual != nil || !model.canvasTokens.isEmpty {
+                canvasPanel
+            }
             messageList
             inputRow
         }
@@ -229,12 +231,7 @@ public struct AssistantChatView: View {
                 A2UINativeRenderer(surface: visual, onAction: handleVisualAction)
             }
 
-            if model.canvasTokens.isEmpty {
-                Text("Waiting for A2UI tokens from MCP tools.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
+            if !model.canvasTokens.isEmpty {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(model.canvasTokens.suffix(10)) { token in

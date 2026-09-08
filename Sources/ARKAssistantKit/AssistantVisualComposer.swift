@@ -27,22 +27,31 @@ public enum AssistantVisualComposer {
     }
 
     /// Builds a surface for an executed action. Prefers the executor-provided A2UI JSON when present
-    /// and decodable; otherwise composes one from the outcome message.
-    public static func surface(for outcome: AssistantActionOutcome, action: AssistantAction?) -> A2UISurface {
+    /// and decodable; otherwise only composes structured results, never plain confirmations.
+    public static func surface(for outcome: AssistantActionOutcome, action: AssistantAction?) -> A2UISurface? {
         if let json = outcome.a2uiSurfaceJSON, let provided = A2UISurface.decode(json: json) {
             return provided
         }
+        guard hasStructuredContent(outcome.message) else { return nil }
         let title = action?.title ?? (outcome.isFailure ? "Couldn't do that" : "Done")
         let icon = outcome.isFailure ? "exclamationmark.triangle.fill" : symbol(for: action?.category)
         return compose(title: title, body: outcome.message, icon: icon)
     }
 
-    /// Builds a surface for a plain assistant reply. Returns `nil` when the reply has no structure
-    /// worth showing (a single short sentence).
+    /// Prose stays in the conversation, regardless of length or paragraph count.
+    /// Lists, steps and field/value results can benefit from a visual layout.
     public static func surface(forReply reply: String, title: String = "ARK") -> A2UISurface? {
-        let lines = extractLines(from: reply)
-        guard lines.count > 1 || reply.count > 120 else { return nil }
+        guard hasStructuredContent(reply) else { return nil }
         return compose(title: title, body: reply, icon: "sparkles")
+    }
+
+    private static func hasStructuredContent(_ text: String) -> Bool {
+        extractLines(from: text).filter { line in
+            switch line {
+            case .bullet, .step, .keyValue: return true
+            case .paragraph: return false
+            }
+        }.count >= 2
     }
 
     public static func compose(title: String, body: String, icon: String? = nil) -> A2UISurface {

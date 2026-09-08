@@ -36,7 +36,7 @@ struct AssistantActionExecutionTests {
         return condition()
     }
 
-    @Test func resolvedUtteranceCallsExecutorAndSetsVisual() async {
+    @Test func resolvedUtteranceKeepsPlainConfirmationInConversation() async {
         let executor = StubActionExecutor()
         let model = AssistantChatViewModel(endpoint: nil, actionCatalog: Self.catalog, actionExecutor: executor)
 
@@ -50,7 +50,9 @@ struct AssistantActionExecutionTests {
         #expect(executor.performed.first?.source == .text)
         #expect(model.messages.last?.role == .assistant)
         #expect(model.messages.last?.text == "Studio session started for Demo Song.")
-        #expect(model.responseVisual?.component(id: "title")?.text == .literal("Start Studio Session"))
+        #expect(model.responseVisual == nil)
+        #expect(model.messages.last?.visual == nil)
+        #expect(AssistantPetWindowPolicy.size(for: model) == AssistantPetWindowPolicy.expandedSize)
         #expect(model.lastActionInvocation?.action.name == "session.start")
         #expect(model.lastError == nil)
     }
@@ -71,7 +73,37 @@ struct AssistantActionExecutionTests {
         let outcome = await model.performAction(AssistantActionInvocation(action: Self.catalog.actions[0], source: .voice))
         #expect(outcome.isFailure)
         #expect(model.lastError == "No active project.")
-        #expect(model.responseVisual?.component(id: "icon")?.name == .literal("exclamationmark.triangle.fill"))
+        #expect(model.responseVisual == nil)
+    }
+
+    @Test func plainConfirmationClearsPreviousStructuredCardAndShrinksCompanion() async {
+        let executor = StubActionExecutor()
+        executor.outcome = .init(message: "Project: Music\nState: Ready")
+        let model = AssistantChatViewModel(actionCatalog: Self.catalog, actionExecutor: executor, remoteToolsEnabled: false)
+        let invocation = AssistantActionInvocation(action: Self.catalog.actions[0], source: .pet)
+        await model.performAction(invocation)
+        #expect(model.responseVisual != nil)
+        #expect(AssistantPetWindowPolicy.size(for: model) == AssistantPetWindowPolicy.visualSize)
+
+        executor.outcome = .init(message: "Opened Music's Live Session panel; recording has not started.")
+        await model.performAction(invocation)
+        #expect(model.responseVisual == nil)
+        #expect(model.messages.last?.visual == nil)
+        #expect(model.messages.first?.visual != nil)
+        #expect(AssistantPetWindowPolicy.size(for: model) == AssistantPetWindowPolicy.expandedSize)
+    }
+
+    @Test func unavailableActionClearsPreviousCard() async {
+        let executor = StubActionExecutor()
+        executor.outcome = .init(message: "Project: Music\nState: Ready")
+        let model = AssistantChatViewModel(actionCatalog: Self.catalog, actionExecutor: executor, remoteToolsEnabled: false)
+        let invocation = AssistantActionInvocation(action: Self.catalog.actions[0], source: .pet)
+        await model.performAction(invocation)
+        #expect(model.responseVisual != nil)
+        model.actionExecutor = nil
+        await model.performAction(invocation)
+        #expect(model.responseVisual == nil)
+        #expect(model.messages.last?.visual == nil)
     }
 
     @Test func muteRefusesPushToTalk() {

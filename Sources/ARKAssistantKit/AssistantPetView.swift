@@ -222,6 +222,9 @@ public struct AssistantPetView: View {
             }
         }
         .padding(12)
+        // Keep the board and chrome anchored while transcript/card content grows
+        // below them. The background fills the host's frame instead of recentering.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(panelBackground)

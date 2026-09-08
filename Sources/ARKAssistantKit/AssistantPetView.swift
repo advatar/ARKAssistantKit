@@ -158,6 +158,7 @@ public struct AssistantPetWindowPolicy {
 public struct AssistantPetView: View {
     @ObservedObject private var model: AssistantChatViewModel
     private let onOpenChat: (() -> Void)?
+    private let onToggleChat: (() -> Void)?
     private let onDismiss: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -169,9 +170,20 @@ public struct AssistantPetView: View {
     /// Incremented on each touch so the ripple and haptic have something to fire on.
     @State private var touchCount = 0
 
-    public init(model: AssistantChatViewModel, onOpenChat: (() -> Void)? = nil, onDismiss: (() -> Void)? = nil) {
+    /// - Parameters:
+    ///   - onOpenChat: Shows the chat window. Used by affordances that should only
+    ///     ever open it, such as the prompt button and the accessibility action.
+    ///   - onToggleChat: Shows or hides the chat window. Falls back to `onOpenChat`
+    ///     when a host cannot hide it.
+    public init(
+        model: AssistantChatViewModel,
+        onOpenChat: (() -> Void)? = nil,
+        onToggleChat: (() -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
         _model = ObservedObject(wrappedValue: model)
         self.onOpenChat = onOpenChat
+        self.onToggleChat = onToggleChat
         self.onDismiss = onDismiss
     }
 
@@ -252,13 +264,21 @@ public struct AssistantPetView: View {
                 .accessibilityLabel("Stop speaking")
             }
 
-            if let onOpenChat {
-                Button(action: onOpenChat) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .foregroundStyle(Color.secondary)
+            if let chatAction = onToggleChat ?? onOpenChat {
+                let isOpen = model.isChatWindowOpen
+                Button(action: chatAction) {
+                    Image(systemName: isOpen
+                          ? "bubble.left.and.bubble.right.fill"
+                          : "bubble.left.and.bubble.right")
+                        .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Open chat")
+                .accessibilityLabel(isOpen ? "Hide chat" : "Open chat")
+                .accessibilityValue(isOpen ? "Showing" : "Hidden")
+                .accessibilityAddTraits(isOpen ? [.isButton, .isSelected] : .isButton)
+                #if os(macOS)
+                .help(isOpen ? "Hide the chat window" : "Open the chat window")
+                #endif
             }
 
             if let onDismiss {

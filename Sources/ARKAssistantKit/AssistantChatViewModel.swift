@@ -46,6 +46,11 @@ public final class AssistantChatViewModel: ObservableObject {
         }
     }
 
+    /// Whether the separate chat window is currently on screen. The host owns the
+    /// window and keeps this in step, including when the window is closed by its
+    /// own close button, so the pet's chat toggle always reflects reality.
+    @Published public var isChatWindowOpen = false
+
     @Published public private(set) var messages: [Message] = []
     @Published public var inputText: String = ""
     @Published public private(set) var isResponding = false

@@ -5,6 +5,57 @@
 import SwiftUI
 import MCPClientKit
 
+/// Shared studio voice. Evidence claims still come from host actions, never this persona.
+public enum SessionAssistant {
+    public static let name = "Session Assistant"
+    public static let instructions = """
+    You are ARK's Session Assistant: a calm, discreet assistant engineer beside the mixing desk.
+    Help people get the room ready, check what happened, and wrap up their session.
+    Use short, plain studio language. Be warm without mascot chatter, hype, or unsolicited creative direction.
+    Never claim to hear audio, see the DAW, know a participant, or have performed an action without supplied evidence.
+    Distinguish observed track metadata, instrument-classifier suggestions, self-declared roles, and participant confirmations.
+    An instrument match can suggest whom to ask; it cannot identify who performed a take.
+    State capture gaps, timing uncertainty, missing data and unresolved attribution plainly. Never turn an inference into a fact.
+    Cryptographic integrity does not prove authorship or independently verify a self-claimed identity.
+    Ask for confirmation through the available review flow. Never sign, assign credit, start capture or change a session autonomously.
+    Only describe capabilities and actions available on this device. Do not imply shared chat history across devices.
+    """
+}
+
+/// Explicit navigation, not an automatically generated claim about session readiness.
+struct SessionAssistantStartingPoints: View {
+    @ObservedObject var model: AssistantChatViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Beside you at the desk.").font(.headline)
+            Text("Prepare the room, review the work, then check what still needs your attention.")
+                .font(.caption).foregroundStyle(.secondary)
+            destination("Get the room ready", symbol: "person.2", action: "navigation.liveSession")
+            #if os(iOS)
+            destination("Check what happened", symbol: "clock", action: "protection.projectStatus")
+            #else
+            destination("Check what happened", symbol: "clock", action: "navigation.eventHistory")
+            #endif
+            destination("Review before wrapping up", symbol: "checklist", action: "requests.pending")
+            destination("View proofs", symbol: "checkmark.seal", action: "navigation.evidence")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func destination(_ title: String, symbol: String, action: String) -> some View {
+        if model.actionCatalog.action(named: action) != nil, model.actionExecutor != nil {
+            Button { model.submitAction(named: action) } label: {
+                Label(title, systemImage: symbol).font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 3)
+            }
+            .disabled(model.isResponding)
+            .accessibilityIdentifier("session-assistant-\(action)")
+        }
+    }
+}
+
 /// Presents the assistant Chat Screen interface for ARKAssistantKit in the shared Swift packages.
 public struct AssistantChatScreen: View {
     @StateObject private var model: AssistantChatViewModel
@@ -63,7 +114,7 @@ public struct AssistantChatView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !compactConversation {
-                Text("ARK Assistant")
+                Text(SessionAssistant.name)
                     .font(.headline)
             }
             Text(model.localModelText)
@@ -74,7 +125,13 @@ public struct AssistantChatView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            if !voiceInputEnabled {
+            Toggle("Spoken replies", isOn: $model.spokenRepliesEnabled)
+                .font(.caption)
+                .disabled(model.isStudioQuiet)
+                .onChange(of: model.spokenRepliesEnabled) { enabled in
+                    if !enabled { model.stopSpeaking() }
+                }
+            if !voiceInputEnabled || model.isStudioQuiet {
                 Text("Voice chat is paused during Live Session. You can still type.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -106,9 +163,8 @@ public struct AssistantChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    if compactConversation && model.messages.isEmpty {
-                        Text("Talk or type, just like with the Mac pet. Try ‘list my projects’, ‘what needs attention’, or ask how ARK works.")
-                            .foregroundStyle(.secondary)
+                    if model.messages.isEmpty {
+                        SessionAssistantStartingPoints(model: model)
                             .padding(12)
                     }
                     ForEach(model.messages) { message in

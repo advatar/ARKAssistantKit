@@ -108,7 +108,7 @@ public struct ARKPetStateDescriptor: Equatable, Sendable {
 // MARK: - Window policy
 
 public struct AssistantPetWindowPolicy {
-    public static let compactSize = CGSize(width: 188, height: 236)
+    public static let compactSize = CGSize(width: 240, height: 270)
     public static let expandedSize = CGSize(width: 300, height: 360)
     public static let visualSize = CGSize(width: 420, height: 560)
 
@@ -145,15 +145,27 @@ public struct AssistantPetView: View {
         let descriptor = descriptor
         VStack(spacing: 8) {
             topBar(descriptor)
+            Text(SessionAssistant.name).font(.headline)
             character(descriptor)
                 .contentShape(Rectangle())
                 .gesture(pushToTalkGesture)
-                .accessibilityLabel("ARK pet, \(descriptor.status)")
-                .accessibilityHint(descriptor.primaryActionHint)
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel("Session Assistant, \(model.isStudioQuiet ? "Quiet during Live Session" : descriptor.status)")
+                .accessibilityHint(model.isStudioQuiet ? "Open chat to type." : descriptor.primaryActionHint)
+                .accessibilityAction {
+                    if model.isStudioQuiet { onOpenChat?() }
+                    else if model.isRecording { model.stopPushToTalk() }
+                    else { model.startPushToTalk() }
+                }
                 #if os(macOS)
                 .help(descriptor.primaryActionHint)
                 #endif
             statusRow(descriptor)
+            if model.messages.isEmpty, let onOpenChat {
+                Button("How can I help this session?", action: onOpenChat)
+                    .font(.caption)
+            }
             transcriptStrip
             if let visual = model.responseVisual {
                 visualPanel(visual)
@@ -213,17 +225,17 @@ public struct AssistantPetView: View {
                         .foregroundStyle(Color.secondary)
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Hide pet")
+                .accessibilityLabel("Hide Session Assistant")
             }
         }
         .font(.system(size: 14, weight: .semibold))
     }
 
     private func character(_ descriptor: ARKPetStateDescriptor) -> some View {
-        let shouldPulse = descriptor.pulses && !reduceMotion
+        let shouldPulse = descriptor.phase == .listening && !reduceMotion && !model.isStudioQuiet
         return AssistantPetCharacter(
             descriptor: descriptor,
-            isPressed: isPressing,
+            isPressed: isPressing && !model.isStudioQuiet,
             pulse: shouldPulse ? pulseOn : false
         )
         .animation(
@@ -238,7 +250,7 @@ public struct AssistantPetView: View {
         HStack(spacing: 6) {
             Image(systemName: descriptor.symbol)
                 .font(.system(size: 11, weight: .bold))
-            Text(descriptor.status)
+            Text(model.isStudioQuiet ? "Quiet · Live Session" : descriptor.status)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
         }
@@ -329,157 +341,41 @@ public struct AssistantPetView: View {
     }
 }
 
-// MARK: - Cartoon character
+// MARK: - Compact console companion
 
 struct AssistantPetCharacter: View {
     let descriptor: ARKPetStateDescriptor
     let isPressed: Bool
     let pulse: Bool
 
-    private var accent: Color { descriptor.color }
-
     var body: some View {
-        ZStack {
-            Ellipse()
-                .fill(Color.black.opacity(0.14))
-                .frame(width: 64, height: 10)
-                .offset(y: 52)
-
-            // Legs
-            Capsule().fill(limbGradient).frame(width: 18, height: 32).rotationEffect(.degrees(8)).offset(x: -21, y: 38)
-            Capsule().fill(limbGradient).frame(width: 18, height: 32).rotationEffect(.degrees(-8)).offset(x: 21, y: 38)
-
-            // Arms
-            Capsule().fill(limbGradient).frame(width: 18, height: 44)
-                .rotationEffect(.degrees(descriptor.phase == .listening ? 28 : -16), anchor: .top)
-                .offset(x: -40, y: descriptor.phase == .listening ? 6 : 14)
-            Capsule().fill(limbGradient).frame(width: 18, height: 44)
-                .rotationEffect(.degrees(descriptor.phase == .listening ? -28 : 16), anchor: .top)
-                .offset(x: 40, y: descriptor.phase == .listening ? 6 : 14)
-
-            // Body
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(bodyGradient)
-                .frame(width: 68, height: 64)
-                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white.opacity(0.32), lineWidth: 1))
-                .offset(y: 16)
-
-            // Chest badge
-            ZStack {
-                Circle().fill(.white.opacity(0.9)).frame(width: 26, height: 26)
-                Image(systemName: descriptor.symbol)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(accent)
+        VStack(spacing: 14) {
+            HStack {
+                Circle().fill(descriptor.color).frame(width: 7, height: 7)
+                Text("ARK").font(.system(.caption2, design: .monospaced).weight(.bold))
+                Spacer()
+                Image(systemName: descriptor.symbol).foregroundStyle(descriptor.color)
             }
-            .offset(y: 12)
-
-            AssistantPetCloudHead(descriptor: descriptor)
-                .offset(y: -30)
-        }
-        .frame(width: 112, height: 122)
-        .scaleEffect(isPressed ? 0.94 : (pulse ? 1.04 : 1.0))
-        .shadow(color: accent.opacity(pulse ? 0.4 : 0.22), radius: pulse ? 14 : 9, y: 5)
-    }
-
-    private var bodyGradient: LinearGradient {
-        LinearGradient(colors: [accent.opacity(0.95), accent.opacity(0.62)], startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-
-    private var limbGradient: LinearGradient {
-        LinearGradient(colors: [accent.opacity(0.88), accent.opacity(0.58)], startPoint: .top, endPoint: .bottom)
-    }
-}
-
-struct AssistantPetCloudHead: View {
-    let descriptor: ARKPetStateDescriptor
-    private var accent: Color { descriptor.color }
-
-    var body: some View {
-        ZStack {
-            HStack(spacing: -16) {
-                Circle().frame(width: 44, height: 44)
-                Circle().frame(width: 54, height: 54)
-                Circle().frame(width: 44, height: 44)
-            }
-            .foregroundStyle(headGradient)
-            .offset(y: -7)
-
-            RoundedRectangle(cornerRadius: 25, style: .continuous)
-                .fill(headGradient)
-                .frame(width: 90, height: 54)
-                .overlay(RoundedRectangle(cornerRadius: 25, style: .continuous).stroke(.white.opacity(0.3), lineWidth: 1))
-                .offset(y: 5)
-
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(red: 0.055, green: 0.075, blue: 0.18))
-                .frame(width: 58, height: 34)
-                .overlay(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 1)
-                        AssistantPetFace(descriptor: descriptor)
-                    }
-                )
-                .offset(y: 5)
-        }
-        .frame(width: 98, height: 72)
-    }
-
-    private var headGradient: LinearGradient {
-        LinearGradient(colors: [accent.opacity(0.98), accent.opacity(0.66)], startPoint: .topLeading, endPoint: .bottomTrailing)
-    }
-}
-
-struct AssistantPetFace: View {
-    let descriptor: ARKPetStateDescriptor
-
-    var body: some View {
-        Group {
-            switch descriptor.phase {
-            case .listening:
-                HStack(spacing: 8) {
-                    Circle().frame(width: 7, height: 7)
-                    Image(systemName: "waveform").font(.system(size: 12, weight: .bold))
-                    Circle().frame(width: 7, height: 7)
-                }
-            case .thinking:
-                HStack(spacing: 5) {
-                    Circle().frame(width: 6, height: 6)
-                    Circle().frame(width: 6, height: 6)
-                    Circle().frame(width: 6, height: 6)
-                }
-            case .speaking:
-                HStack(spacing: 8) {
-                    Capsule().frame(width: 6, height: 10)
-                    Image(systemName: "speaker.wave.2.fill").font(.system(size: 11, weight: .bold))
-                    Capsule().frame(width: 6, height: 10)
-                }
-            case .unavailable:
-                HStack(spacing: 14) {
-                    Capsule().frame(width: 8, height: 3).rotationEffect(.degrees(15))
-                    Capsule().frame(width: 8, height: 3).rotationEffect(.degrees(-15))
-                }
-            case .ready:
-                VStack(spacing: 5) {
-                    HStack(spacing: 16) {
-                        Capsule().frame(width: 6, height: descriptor.isMuted ? 3 : 10)
-                        Capsule().frame(width: 6, height: descriptor.isMuted ? 3 : 10)
-                    }
-                    AssistantPetSmile()
-                        .stroke(Color.white.opacity(0.94), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .frame(width: 14, height: descriptor.isMuted ? 2 : 6)
+            HStack(spacing: 18) {
+                ForEach(0..<3) { index in
+                    Capsule().fill(Color.secondary.opacity(0.25))
+                        .frame(width: 3, height: 38)
+                        .overlay(alignment: .center) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(Color.primary.opacity(0.8))
+                                .frame(width: 13, height: 7)
+                                .offset(y: CGFloat(index - 1) * 7)
+                        }
                 }
             }
+            // This is a state lamp, not an invented audio level meter.
+            Capsule().fill(descriptor.color.opacity(pulse ? 0.9 : 0.35))
+                .frame(height: 3)
         }
-        .foregroundStyle(Color.white.opacity(0.94))
-        .shadow(color: descriptor.color.opacity(0.8), radius: 4)
-    }
-}
-
-struct AssistantPetSmile: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.midX, y: rect.maxY))
-        return path
+        .padding(14)
+        .frame(width: 130, height: 122)
+        .background(RoundedRectangle(cornerRadius: 18).fill(Color.secondary.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.secondary.opacity(0.3)))
+        .scaleEffect(isPressed ? 0.98 : 1)
     }
 }

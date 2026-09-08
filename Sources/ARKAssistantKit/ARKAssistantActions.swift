@@ -25,8 +25,8 @@ public enum ARKAssistantActions {
                ["show event history", "open event history"], project: true),
         action("assistant.openChat", "Open Chat", "Opens the existing assistant chat with this same conversation.",
                ["open chat", "show chat", "open assistant chat"]),
-        action("assistant.openPet", "Open Pet", "Opens the pet or mobile assistant without starting microphone capture.",
-               ["open pet", "show pet"]),
+        action("assistant.openPet", "Open Session Assistant", "Opens the Session Assistant without starting microphone capture.",
+               ["open pet", "show pet", "open session assistant", "show session assistant"]),
         action("assistant.muteMicrophone", "Mute Microphone", "Cancels capture and mutes the pet microphone.",
                ["mute the mic", "mute microphone", "mute the microphone", "stop listening"])
     ])

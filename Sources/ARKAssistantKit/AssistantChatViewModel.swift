@@ -62,6 +62,8 @@ public final class AssistantChatViewModel: ObservableObject {
     /// High-level voice state for the pet and chrome.
     @Published public private(set) var voicePhase: AssistantVoicePhase = .ready
     @Published public private(set) var isSpeaking = false
+    @Published public var spokenRepliesEnabled = false
+    @Published public private(set) var isStudioQuiet = false
     @Published public private(set) var isMicrophoneMuted = false
     /// Last executed action invocation, if any (for audit and UI).
     @Published public private(set) var lastActionInvocation: AssistantActionInvocation?
@@ -213,7 +215,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public var canUseVoice: Bool {
-        !isResponding
+        !isStudioQuiet && !isResponding
             && !isTranscribingVoice
     }
 
@@ -252,6 +254,7 @@ public final class AssistantChatViewModel: ObservableObject {
     }
 
     public func startPushToTalk() {
+        guard !isStudioQuiet else { return }
         guard !isMicrophoneMuted else {
             voiceStatusText = "Microphone is muted"
             return
@@ -343,6 +346,20 @@ public final class AssistantChatViewModel: ObservableObject {
         defaultToolContext = MCPDefaultToolContext(projectID: defaultProjectID)
     }
 
+    /// Hosts conservatively keep the assistant quiet for the whole live session.
+    public func setStudioQuiet(_ quiet: Bool) {
+        guard isStudioQuiet != quiet else { return }
+        isStudioQuiet = quiet
+        if quiet { cancelInteraction() }
+    }
+
+    var permitsSpokenReply: Bool { spokenRepliesEnabled && !isStudioQuiet && !Task.isCancelled }
+
+    private func speakIfAllowed(_ text: String) async {
+        guard permitsSpokenReply else { return }
+        await speechSpeaker.speak(text)
+    }
+
     /// Interrupts any in-flight speech.
     public func stopSpeaking() {
         speechSpeaker.stop()
@@ -396,7 +413,7 @@ public final class AssistantChatViewModel: ObservableObject {
         }
         let outcome = await performAction(invocation)
         if speakResponse, !Task.isCancelled {
-            await speechSpeaker.speak(outcome.message)
+            await speakIfAllowed(outcome.message)
         }
         return outcome
     }
@@ -595,7 +612,7 @@ public final class AssistantChatViewModel: ObservableObject {
                     : "Available app actions:\n" + actionCatalog.actions.map { "• \($0.title)" }.joined(separator: "\n")
                 appendMessage(role: .assistant, text: response)
                 if speakResponse {
-                    await speechSpeaker.speak(response)
+                    await speakIfAllowed(response)
                 }
                 return
             }
@@ -603,7 +620,7 @@ public final class AssistantChatViewModel: ObservableObject {
             if actionExecutor == nil, let response = Self.navigationLinkResponse(for: userText) {
                 appendMessage(role: .assistant, text: response)
                 if speakResponse {
-                    await speechSpeaker.speak(response)
+                    await speakIfAllowed(response)
                 }
                 return
             }
@@ -619,7 +636,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 let response = MCPToolFormatting.formatToolResult(isError: result.isError, text: result.text)
                 appendMessage(role: .assistant, text: response)
                 if speakResponse {
-                    await speechSpeaker.speak(result.text)
+                    await speakIfAllowed(result.text)
                 }
                 return
             }
@@ -645,7 +662,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 if AssistantActionExecutionPolicy.requiresClarification(for: userText) {
                     let clarification = AssistantActionExecutionPolicy.clarification(for: invocation.action)
                     updateMessage(id: assistantId, text: clarification)
-                    if speakResponse { await speechSpeaker.speak(clarification) }
+                    if speakResponse { await speakIfAllowed(clarification) }
                     return
                 }
                 // Replace the raw JSON placeholder with the action outcome.
@@ -653,7 +670,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 let outcome = await performAction(invocation)
                 try Task.checkCancellation()
                 if speakResponse {
-                    await speechSpeaker.speak(outcome.message)
+                    await speakIfAllowed(outcome.message)
                 }
                 return
             }
@@ -664,7 +681,7 @@ public final class AssistantChatViewModel: ObservableObject {
                 messages[index].visual = responseVisual
             }
             if speakResponse, let reply = messages.first(where: { $0.id == assistantId })?.text {
-                await speechSpeaker.speak(reply)
+                await speakIfAllowed(reply)
             }
         } catch {
             guard !Task.isCancelled, generation == responseGeneration else { return }
@@ -743,9 +760,10 @@ public final class AssistantChatViewModel: ObservableObject {
         }()
 
         return """
-        You are ARK Assistant. Keep responses concise and actionable.
+        \(SessionAssistant.instructions)
         Chat naturally. Use MCP tools only when ARK data or actions are needed.
         Treat project context as the default target for MCP tool arguments unless the user specifies a different project.
+        Assistant voice availability: \(isStudioQuiet ? "paused during Live Session; use text chat" : "push-to-talk available when permitted; opening chat never starts capture"). This does not establish whether studio evidence capture is running or complete.
 
         \(contextBlock)
 
@@ -915,7 +933,7 @@ public final class AssistantChatViewModel: ObservableObject {
             ? "No MCP tools are currently connected."
             : "Connected MCP tools: \(tools.prefix(20).map(\.name).joined(separator: ", "))."
         var instructions = """
-            You are an ARK assistant. Keep responses concise and actionable.
+            \(SessionAssistant.instructions)
             For greetings and general chat, reply directly.
             If the user asks for ARK data or actions and a tool would be required, say which connected MCP tool/action is needed instead of pretending you executed it.
             Treat project context as the default target for tool arguments unless the user specifies a different project.

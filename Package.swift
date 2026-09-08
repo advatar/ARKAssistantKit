@@ -26,7 +26,11 @@ let package = Package(
             dependencies: [
                 "MCPClientKit",
                 .product(name: "GemmaKit", package: "GemmaKit", condition: .when(platforms: [.macOS]))
-            ]
+            ],
+            // Mirrored from the shared assistant catalog by
+            // Scripts/sync-action-catalog.sh; ActionCatalogSyncTests fails if the
+            // copy drifts from the submodule.
+            resources: [.process("Resources/actions.json")]
         ),
         .testTarget(
             name: "MCPClientKitTests",

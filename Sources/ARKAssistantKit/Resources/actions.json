@@ -1,0 +1,705 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "name": "app.install",
+      "title": "Install ARK",
+      "description": "Explains how to install the ARK app and what an agent may and may not do on the user's behalf.",
+      "category": "account",
+      "authority": "read",
+      "surfaces": [
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "how do i install ark",
+        "install ark",
+        "get started with ark"
+      ],
+      "mcpToolName": "ark.app.install"
+    },
+    {
+      "name": "protection.listProjects",
+      "title": "List Projects",
+      "description": "Lists the signed-in user's available ARK projects.",
+      "category": "protection",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "list projects",
+        "list my projects",
+        "which projects do i have",
+        "what projects do i have",
+        "show my projects"
+      ],
+      "mcpToolName": "ark.projects.search",
+      "parameters": [
+        {
+          "name": "query",
+          "title": "Optional project search text",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "title": "Maximum projects to return",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        },
+        {
+          "name": "membership",
+          "title": "Only projects the user is a member of",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "name": "protection.projectStatus",
+      "title": "Project Status",
+      "description": "Reports the selected project's recorded state.",
+      "category": "protection",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "project status",
+        "current project status",
+        "how is the project",
+        "what is the project status"
+      ],
+      "parameters": [
+        {
+          "name": "project",
+          "title": "Exact project name or ID; omit to use the selected project",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "requests.pending",
+      "title": "Pending Requests",
+      "description": "Reports pending invitations and signing requests, without accepting or signing anything.",
+      "category": "requests",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "what's pending",
+        "what is pending",
+        "pending requests",
+        "what needs attention"
+      ],
+      "mcpToolName": "ark.requests.pending",
+      "parameters": [
+        {
+          "name": "recipient",
+          "title": "The signed-in user's recipient handle",
+          "type": "string",
+          "isRequired": true
+        }
+      ]
+    },
+    {
+      "name": "session.list",
+      "title": "List Sessions",
+      "description": "Lists the user's recorded studio sessions, most recent first.",
+      "category": "session",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "list sessions",
+        "show my sessions",
+        "what sessions do i have"
+      ],
+      "parameters": [
+        {
+          "name": "limit",
+          "title": "Maximum sessions to return",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      ],
+      "mcpToolName": "ark.sessions.list"
+    },
+    {
+      "name": "session.get",
+      "title": "Read Session",
+      "description": "Reads one studio session, including its recorded participants and state.",
+      "category": "session",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show session",
+        "read session"
+      ],
+      "parameters": [
+        {
+          "name": "session",
+          "title": "Session ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "session_id"
+        }
+      ],
+      "mcpToolName": "ark.sessions.get"
+    },
+    {
+      "name": "evidence.get",
+      "title": "Read Evidence",
+      "description": "Reads a recorded proof. Does not generate, alter or sign a proof.",
+      "category": "evidence",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show evidence for",
+        "read proof"
+      ],
+      "parameters": [
+        {
+          "name": "proof",
+          "title": "Proof ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "proof_id"
+        }
+      ],
+      "mcpToolName": "ark.evidence.get"
+    },
+    {
+      "name": "attestation.result",
+      "title": "Attestation Result",
+      "description": "Reports whether the user has completed an attestation on their device. Stays pending until the in-app ceremony finishes.",
+      "category": "signing",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "did the signature go through",
+        "attestation result"
+      ],
+      "parameters": [
+        {
+          "name": "signingSession",
+          "title": "Signing session ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "signing_session_id"
+        }
+      ],
+      "mcpToolName": "ark.attestation.result"
+    },
+    {
+      "name": "navigation.work",
+      "title": "Show Work",
+      "description": "Opens the existing work or projects view.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show work",
+        "show dashboard",
+        "show the dashboard",
+        "open work"
+      ]
+    },
+    {
+      "name": "navigation.requests",
+      "title": "Show Requests",
+      "description": "Selects the existing requests view.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show requests",
+        "show my requests",
+        "show shares",
+        "open requests"
+      ]
+    },
+    {
+      "name": "navigation.evidence",
+      "title": "Show Evidence",
+      "description": "Selects the existing proofs view; does not generate or sign a proof.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show evidence",
+        "show my evidence",
+        "show proofs",
+        "open proofs"
+      ]
+    },
+    {
+      "name": "navigation.help",
+      "title": "Show Help",
+      "description": "Selects the existing help view.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show help",
+        "open help",
+        "i need help"
+      ]
+    },
+    {
+      "name": "navigation.project",
+      "title": "Open Project",
+      "description": "Opens a managed project's existing view.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "open project",
+        "show current project"
+      ],
+      "parameters": [
+        {
+          "name": "project",
+          "title": "Exact project name or ID; omit to use the selected project",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "navigation.liveSession",
+      "title": "Open Live Session",
+      "description": "Opens the Live Session panel. Does not start a session or recording.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "open live session",
+        "show live session"
+      ],
+      "parameters": [
+        {
+          "name": "project",
+          "title": "Exact project name or ID; omit to use the selected project",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "navigation.eventHistory",
+      "title": "Open Event History",
+      "description": "Opens the project's recorded event history.",
+      "category": "navigation",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "show event history",
+        "open event history"
+      ],
+      "parameters": [
+        {
+          "name": "project",
+          "title": "Exact project name or ID; omit to use the selected project",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "assistant.openChat",
+      "title": "Open Chat",
+      "description": "Opens the existing assistant chat with this same conversation.",
+      "category": "assistant",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "open chat",
+        "show chat",
+        "open assistant chat"
+      ]
+    },
+    {
+      "name": "assistant.openPet",
+      "title": "Open Pet",
+      "description": "Opens the pet or mobile assistant without starting microphone capture.",
+      "category": "assistant",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "open pet",
+        "show pet"
+      ]
+    },
+    {
+      "name": "assistant.muteMicrophone",
+      "title": "Mute Microphone",
+      "description": "Cancels capture and mutes the pet microphone.",
+      "category": "assistant",
+      "authority": "navigate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "siri",
+        "mcpLocal"
+      ],
+      "phrases": [
+        "mute the mic",
+        "mute microphone",
+        "mute the microphone",
+        "stop listening"
+      ]
+    },
+    {
+      "name": "session.start",
+      "title": "Start Session",
+      "description": "Records a new studio session. Does not start microphone capture or recording, which stay a device-side action.",
+      "category": "session",
+      "authority": "initiate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "producesEvidence": true,
+      "phrases": [
+        "start a session",
+        "start studio session",
+        "new session"
+      ],
+      "parameters": [
+        {
+          "name": "title",
+          "title": "Session title",
+          "type": "string",
+          "isRequired": true
+        },
+        {
+          "name": "project",
+          "title": "Exact project name or ID",
+          "type": "string"
+        }
+      ],
+      "mcpToolName": "ark.sessions.start"
+    },
+    {
+      "name": "session.submitCorrection",
+      "title": "Submit Correction",
+      "description": "Appends a participant-authored correction, and optional evidence references, to a session record.",
+      "category": "session",
+      "authority": "initiate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "producesEvidence": true,
+      "phrases": [
+        "correct the attribution",
+        "submit a correction"
+      ],
+      "parameters": [
+        {
+          "name": "session",
+          "title": "Session ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "session_id"
+        },
+        {
+          "name": "participant",
+          "title": "Participant ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "participant_id"
+        },
+        {
+          "name": "text",
+          "title": "The correction",
+          "type": "string",
+          "isRequired": true
+        },
+        {
+          "name": "linkedReferences",
+          "title": "Evidence references",
+          "type": "array",
+          "mcpArgName": "linked_references",
+          "itemsType": "string"
+        }
+      ],
+      "mcpToolName": "session_claims.submit_correction"
+    },
+    {
+      "name": "session.raisePrompt",
+      "title": "Raise Attribution Question",
+      "description": "Raises a silent in-app attribution question for every participant in a live session.",
+      "category": "session",
+      "authority": "initiate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "producesEvidence": true,
+      "phrases": [
+        "ask the room",
+        "raise an attribution question"
+      ],
+      "parameters": [
+        {
+          "name": "session",
+          "title": "Session ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "session_id"
+        },
+        {
+          "name": "prompt",
+          "title": "Prompt ID",
+          "type": "string",
+          "isRequired": true,
+          "mcpArgName": "prompt_id"
+        },
+        {
+          "name": "question",
+          "title": "The question",
+          "type": "string",
+          "isRequired": true
+        },
+        {
+          "name": "supportingText",
+          "title": "Context shown with the question",
+          "type": "string",
+          "mcpArgName": "supporting_text"
+        },
+        {
+          "name": "options",
+          "title": "Answer options",
+          "type": "array",
+          "isRequired": true,
+          "itemsType": "object"
+        }
+      ],
+      "mcpToolName": "session_claims.raise_prompt"
+    },
+    {
+      "name": "attestation.request",
+      "title": "Request Attestation",
+      "description": "Raises an attestation request for the user to approve on their device. Only creates the request: attestation always completes with a biometric ceremony in the app, and no agent can sign on the user's behalf.",
+      "category": "signing",
+      "authority": "initiate",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "producesEvidence": true,
+      "completedByDeviceCeremony": true,
+      "requiresConfirmation": true,
+      "phrases": [
+        "request a signature",
+        "ask me to sign",
+        "request attestation"
+      ],
+      "parameters": [
+        {
+          "name": "purpose",
+          "title": "Signing purpose",
+          "type": "string",
+          "isRequired": true
+        },
+        {
+          "name": "payload",
+          "title": "Purpose-specific payload recorded with the request",
+          "type": "object"
+        },
+        {
+          "name": "summary",
+          "title": "One line shown on the approval screen",
+          "type": "string"
+        }
+      ],
+      "mcpToolName": "ark.attestation.request"
+    },
+    {
+      "name": "people.resolve",
+      "title": "Resolve a Person",
+      "description": "Finds the people matching a name, email or handle, and returns the candidates with how each was identified. A display name is not an identity: the same person appears under a session name, an invitation email and a join code, and two people can share a first name. Call this before any search that names a person, and if more than one candidate comes back, ask the user which one rather than choosing.",
+      "category": "account",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "mcpToolName": "ark.people.resolve",
+      "phrases": [
+        "who is",
+        "which person is"
+      ],
+      "parameters": [
+        {
+          "name": "query",
+          "title": "Name, email or handle to resolve",
+          "type": "string",
+          "isRequired": true
+        },
+        {
+          "name": "project",
+          "title": "Limit to people seen in this project",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "title": "Maximum candidates to return",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 25
+        }
+      ]
+    },
+    {
+      "name": "evidence.search",
+      "title": "Search Attributions",
+      "description": "Searches the recorded attribution history: who played what, on which track, when. Takes a resolved person ID from ark.people.resolve, never a bare name. Results state how each attribution was established and where it stands, and every row cites the evidence it came from. Declared, DAW-metadata and model-inferred attributions are different classes of claim and are reported separately rather than merged.",
+      "category": "evidence",
+      "authority": "read",
+      "surfaces": [
+        "mac",
+        "ios",
+        "mcp",
+        "mcpLocal"
+      ],
+      "mcpToolName": "ark.evidence.search",
+      "phrases": [
+        "what did they play",
+        "list tracks where",
+        "search attributions"
+      ],
+      "parameters": [
+        {
+          "name": "person",
+          "title": "Resolved person ID from ark.people.resolve",
+          "type": "string",
+          "mcpArgName": "person_id"
+        },
+        {
+          "name": "instrument",
+          "title": "Instrument or role, e.g. piano",
+          "type": "string"
+        },
+        {
+          "name": "project",
+          "title": "Exact project name or ID",
+          "type": "string"
+        },
+        {
+          "name": "from",
+          "title": "Earliest date to include, ISO-8601. Filters when the work happened, not when it was recorded.",
+          "type": "string"
+        },
+        {
+          "name": "to",
+          "title": "Latest date to include, ISO-8601",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "title": "Limit to claimed, confirmed, disputed or withheld",
+          "type": "string"
+        },
+        {
+          "name": "source",
+          "title": "Limit to declared, dawMetadata or inferred",
+          "type": "string"
+        },
+        {
+          "name": "limit",
+          "title": "Maximum results to return",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      ]
+    }
+  ]
+}

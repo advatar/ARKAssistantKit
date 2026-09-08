@@ -9,14 +9,30 @@ import Foundation
 
 /// A single parameter an action accepts. Values are always passed as strings (or omitted).
 public struct AssistantActionParameter: Sendable, Equatable, Codable {
+    public enum ValueType: String, Sendable, Codable {
+        case string, integer, boolean, object, array
+    }
+
     public let name: String
     public let title: String
     public let isRequired: Bool
+    public let type: ValueType
 
-    public init(name: String, title: String, isRequired: Bool = false) {
+    public init(name: String, title: String, isRequired: Bool = false, type: ValueType = .string) {
         self.name = name
         self.title = title
         self.isRequired = isRequired
+        self.type = type
+    }
+
+    private enum CodingKeys: String, CodingKey { case name, title, isRequired, type }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        title = try container.decode(String.self, forKey: .title)
+        isRequired = try container.decodeIfPresent(Bool.self, forKey: .isRequired) ?? false
+        type = try container.decodeIfPresent(ValueType.self, forKey: .type) ?? .string
     }
 }
 
@@ -40,6 +56,28 @@ public struct AssistantAction: Sendable, Equatable, Identifiable, Codable {
     /// One-sentence description of what happens.
     public let description: String
     public let category: Category
+    /// How much power the action carries.
+    ///
+    /// There is deliberately no `authorize` level: no surface may complete an
+    /// attestation for the user. See `completedByDeviceCeremony`.
+    public enum Authority: String, Sendable, Codable, CaseIterable {
+        /// Observes. Reports state and changes nothing.
+        case read
+        /// Moves the UI on a device the user is already sitting at.
+        case navigate
+        /// Creates work a human still has to complete.
+        case initiate
+    }
+
+    /// A host that may offer an action.
+    public enum Surface: String, Sendable, Codable, CaseIterable {
+        case mac, ios, siri
+        /// The hosted MCP server. No device is in front of the caller.
+        case mcp
+        /// A local stdio MCP bridge to a running app on the same machine.
+        case mcpLocal
+    }
+
     /// Trigger phrases. Matching is case-insensitive; `{note}`-style placeholders capture free text
     /// into the named parameter. Only complete commands take the deterministic fast path;
     /// other wording is left to the model, not rejected.
@@ -47,8 +85,20 @@ public struct AssistantAction: Sendable, Equatable, Identifiable, Codable {
     public let parameters: [AssistantActionParameter]
     /// When `true`, the executor should require an explicit confirmation before a destructive step.
     public let requiresConfirmation: Bool
+    public let authority: Authority
+    public let surfaces: [Surface]
+    /// `true` when the action writes something that later carries provenance weight.
+    public let producesEvidence: Bool
+    /// `true` when the action only raises a request and the in-app biometric
+    /// ceremony is what actually completes it.
+    public let completedByDeviceCeremony: Bool
 
     public var id: String { name }
+
+    /// Whether this action may be offered on a given host.
+    public func isAvailable(on surface: Surface) -> Bool {
+        surfaces.contains(surface)
+    }
 
     public init(
         name: String,
@@ -57,7 +107,11 @@ public struct AssistantAction: Sendable, Equatable, Identifiable, Codable {
         category: Category,
         phrases: [String],
         parameters: [AssistantActionParameter] = [],
-        requiresConfirmation: Bool = false
+        requiresConfirmation: Bool = false,
+        authority: Authority = .read,
+        surfaces: [Surface] = [.mac, .ios],
+        producesEvidence: Bool = false,
+        completedByDeviceCeremony: Bool = false
     ) {
         self.name = name
         self.title = title
@@ -66,6 +120,31 @@ public struct AssistantAction: Sendable, Equatable, Identifiable, Codable {
         self.phrases = phrases
         self.parameters = parameters
         self.requiresConfirmation = requiresConfirmation
+        self.authority = authority
+        self.surfaces = surfaces
+        self.producesEvidence = producesEvidence
+        self.completedByDeviceCeremony = completedByDeviceCeremony
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, title, description, category, phrases, parameters
+        case requiresConfirmation, authority, surfaces, producesEvidence, completedByDeviceCeremony
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decode(String.self, forKey: .description)
+        category = try container.decode(Category.self, forKey: .category)
+        phrases = try container.decodeIfPresent([String].self, forKey: .phrases) ?? []
+        parameters = try container.decodeIfPresent([AssistantActionParameter].self, forKey: .parameters) ?? []
+        requiresConfirmation = try container.decodeIfPresent(Bool.self, forKey: .requiresConfirmation) ?? false
+        authority = try container.decode(Authority.self, forKey: .authority)
+        surfaces = try container.decode([Surface].self, forKey: .surfaces)
+        producesEvidence = try container.decodeIfPresent(Bool.self, forKey: .producesEvidence) ?? false
+        completedByDeviceCeremony = try container
+            .decodeIfPresent(Bool.self, forKey: .completedByDeviceCeremony) ?? false
     }
 }
 
@@ -76,12 +155,28 @@ public struct AssistantActionInvocation: Sendable, Equatable {
     /// Where the invocation came from; executors may use it for audit metadata.
     public let source: Source
 
-    public enum Source: String, Sendable {
+    public enum Source: String, Sendable, Codable, CaseIterable {
         case voice
         case text
         case siri
         case pet
         case shortcutURL
+        /// The hosted MCP server, acting for a signed-in user who is not present.
+        case mcp
+        /// A local stdio MCP bridge on the user's own machine.
+        case mcpLocal
+        /// An agent driving the user interface directly.
+        case computerUse
+
+        /// `true` when an agent, rather than the person, initiated the action.
+        /// Audit records keep this so an agent-initiated event is never mistaken
+        /// for a deliberate human one.
+        public var isAgent: Bool {
+            switch self {
+            case .mcp, .mcpLocal, .computerUse: return true
+            case .voice, .text, .siri, .pet, .shortcutURL: return false
+            }
+        }
     }
 
     public init(action: AssistantAction, arguments: [String: String] = [:], source: Source) {
